@@ -9,6 +9,7 @@ Four specialized agents:
 """
 import json
 import logging
+import time
 import anthropic
 from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
 
@@ -27,23 +28,35 @@ class BaseAgent:
         self.client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         self.model = CLAUDE_MODEL
 
-    def _call(self, system: str, user: str, max_tokens: int = 1500) -> str:
-        try:
-            msg = self.client.messages.create(
-                model=self.model,
-                max_tokens=max_tokens,
-                system=system,
-                messages=[{"role": "user", "content": user}],
-            )
-            return msg.content[0].text
-        except anthropic.APIConnectionError as exc:
-            logger.error("Claude API connection error: %s", exc)
-            return "⚠️ Could not connect to Claude API. Please check your API key and internet connection."
-        except anthropic.RateLimitError:
-            return "⚠️ Claude API rate limit reached. Please wait a moment and try again."
-        except Exception as exc:
-            logger.error("Claude API error: %s", exc)
-            return f"⚠️ Claude API error: {exc}"
+    def _call(self, system: str, user: str, max_tokens: int = 1200, retries: int = 4) -> str:
+        """Call Claude API with exponential-backoff retry on rate-limit errors."""
+        for attempt in range(retries):
+            try:
+                msg = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=max_tokens,
+                    system=system,
+                    messages=[{"role": "user", "content": user}],
+                )
+                return msg.content[0].text
+
+            except anthropic.RateLimitError:
+                if attempt < retries - 1:
+                    wait = 12 * (attempt + 1)   # 12s → 24s → 36s → 48s
+                    logger.warning("Rate limit hit — waiting %ds (attempt %d/%d)", wait, attempt + 1, retries)
+                    time.sleep(wait)
+                else:
+                    return "⚠️ Claude API עמוס כרגע (Rate Limit). נסה שוב בעוד כמה דקות."
+
+            except anthropic.APIConnectionError as exc:
+                logger.error("Claude API connection error: %s", exc)
+                return "⚠️ לא ניתן להתחבר ל-Claude API — בדוק API key וחיבור לאינטרנט."
+
+            except Exception as exc:
+                logger.error("Claude API error: %s", exc)
+                return f"⚠️ שגיאת Claude API: {exc}"
+
+        return "⚠️ לא ניתן לקבל תשובה מ-Claude לאחר מספר נסיונות."
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -99,7 +112,7 @@ class TechnicalAnalystAgent(BaseAgent):
 
 סגנון: נקודות bullet, קצר ועניני, כולל ציוני emoji.
 """
-        return self._call(self.SYSTEM, user, max_tokens=1800)
+        return self._call(self.SYSTEM, user, max_tokens=1200)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -145,7 +158,7 @@ class FundamentalAnalystAgent(BaseAgent):
 
 סגנון: מקצועי, נקודות bullet, כולל emoji.
 """
-        return self._call(self.SYSTEM, user, max_tokens=1800)
+        return self._call(self.SYSTEM, user, max_tokens=1200)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -184,7 +197,7 @@ class NewsAnalystAgent(BaseAgent):
 
 סגנון: נקודות bullet, ברור ותמציתי, עם emoji.
 """
-        return self._call(self.SYSTEM, user, max_tokens=1600)
+        return self._call(self.SYSTEM, user, max_tokens=1000)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -292,7 +305,7 @@ class SummaryAgent(BaseAgent):
 ---
 ⚠️ **כתב ויתור**: ניתוח זה הוא לצרכי מחקר בלבד ואינו מהווה ייעוץ השקעות מוסדר. כל החלטת השקעה היא באחריות המשקיע בלבד.
 """
-        return self._call(self.SYSTEM, user, max_tokens=2500)
+        return self._call(self.SYSTEM, user, max_tokens=2000)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
