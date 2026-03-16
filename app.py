@@ -27,7 +27,7 @@ from config import (
 )
 from data.stock_fetcher import StockFetcher
 from data.news_fetcher import NewsFetcher
-from data.market_overview import get_market_overview
+from data.market_overview import get_market_overview, _fg_label_he
 from analysis.technical import TechnicalAnalyzer
 from analysis.fundamental import FundamentalAnalyzer
 from charts.plotly_charts import (
@@ -608,34 +608,142 @@ try:
         unsafe_allow_html=True,
     )
 
-    # ── Market overview expander ─────────────────────────────────────────────
-    with st.expander("📊 פירוט מצב השוק — ניתוח טכני ופונדמנטלי מקרו", expanded=True):
+    fear_greed  = market_data.get("fear_greed", {})
+    breakdown   = market_data.get("breakdown", [])
+    us_news     = market_data.get("us_news", [])
+    il_news     = market_data.get("il_news", [])
 
-        # Summary text
+    # ── Fear & Greed widget (always visible) ─────────────────────────────────
+    fg_score  = fear_greed.get("score", 50)
+    fg_color  = fear_greed.get("color", "#888")
+    fg_rating = fear_greed.get("rating", "")
+    fg_src    = fear_greed.get("source", "")
+    fg_p1w    = fear_greed.get("prev_1w")
+    fg_p1m    = fear_greed.get("prev_1m")
+    fg_he     = _fg_label_he(fg_rating) if fg_rating else ""
+
+    fg_bar_w  = int(fg_score)
+    fg_trend  = ""
+    if fg_p1w is not None:
+        diff = fg_score - fg_p1w
+        fg_trend = f"vs שבוע שעבר: {fg_p1w:.0f} ({'▲' if diff>=0 else '▼'}{abs(diff):.0f})"
+
+    fg_html = (
+        f'<div style="background:#161B22;border:1px solid {fg_color}55;border-radius:10px;'
+        f'padding:14px 20px;margin-bottom:8px;">'
+        f'<div style="display:flex;justify-content:space-between;align-items:center">'
+        f'<span style="color:#E6EDF3;font-weight:700;font-size:1rem">🧠 Fear & Greed Index '
+        f'<span style="color:#8B949E;font-size:0.75rem">({fg_src})</span></span>'
+        f'<span style="color:{fg_color};font-size:1.4rem;font-weight:900">{fg_score:.0f}/100</span>'
+        f'</div>'
+        f'<div style="color:{fg_color};font-weight:700;margin:4px 0">{fg_he}</div>'
+        f'<div style="background:#0E1117;border-radius:6px;height:10px;margin:6px 0">'
+        f'<div style="background:linear-gradient(90deg,#00d4a0,#ffcc00,#ff4b4b);'
+        f'width:{fg_bar_w}%;height:100%;border-radius:6px;position:relative">'
+        f'<div style="position:absolute;right:-4px;top:-3px;width:16px;height:16px;'
+        f'background:{fg_color};border-radius:50%;border:2px solid #0E1117"></div>'
+        f'</div></div>'
+        f'<div style="display:flex;justify-content:space-between;'
+        f'font-size:0.65rem;color:#555;margin-top:2px">'
+        f'<span>0 — פחד קיצוני</span><span>50 — ניטרלי</span><span>100 — חמדנות קיצונית</span>'
+        f'</div>'
+        f'{"<div style=color:#8B949E;font-size:0.75rem;margin-top:4px>" + fg_trend + "</div>" if fg_trend else ""}'
+        f'</div>'
+    )
+    st.markdown(fg_html, unsafe_allow_html=True)
+
+    # ── Main expander ────────────────────────────────────────────────────────
+    with st.expander("📊 פירוט מלא — ניתוח שוק, חדשות וציון", expanded=True):
+
+        # Summary
         st.markdown(mkt_summary)
         st.divider()
 
+        # ── Fear & Greed explanation ──────────────────────────────────────────
+        st.markdown("### 🧠 Fear & Greed — הסבר")
+        fg_exp = fear_greed.get("explanation", "")
+        if fg_exp:
+            st.markdown(
+                f'<div class="analysis-box">{fg_exp}</div>',
+                unsafe_allow_html=True,
+            )
+            if fg_p1w is not None and fg_p1m is not None:
+                fg_c1, fg_c2, fg_c3 = st.columns(3)
+                fg_c1.metric("ציון נוכחי", f"{fg_score:.0f}")
+                fg_c2.metric("לפני שבוע",  f"{fg_p1w:.0f}", f"{fg_score-fg_p1w:+.0f}")
+                fg_c3.metric("לפני חודש",  f"{fg_p1m:.0f}", f"{fg_score-fg_p1m:+.0f}")
+        st.divider()
+
+        # ── Score breakdown ───────────────────────────────────────────────────
+        st.markdown("### 📋 פירוט ציון מצב השוק — למה קיבל את הציון הזה?")
+        st.caption(f"ציון סופי: **{mkt_score}/10** (בסיס: 5.0)")
+        running = 5.0
+        for item in breakdown:
+            pts  = item["points"]
+            fac  = item["factor"]
+            exp  = item["explanation"]
+            running += pts
+            clr  = "#00d4a0" if pts > 0 else "#ff4b4b" if pts < 0 else "#888888"
+            sign = "+" if pts >= 0 else ""
+            st.markdown(
+                f'<div style="display:flex;align-items:flex-start;gap:12px;'
+                f'background:#161B22;border-radius:8px;padding:8px 14px;margin:4px 0;'
+                f'border-left:3px solid {clr}">'
+                f'<span style="color:{clr};font-weight:800;min-width:52px;'
+                f'font-size:1rem">{sign}{pts:.1f}</span>'
+                f'<div><b style="color:#E6EDF3">{fac}</b><br>'
+                f'<span style="color:#8B949E;font-size:0.82rem">{exp}</span>'
+                f'<span style="color:{clr};font-size:0.78rem;margin-right:10px"> → סה"כ: {running:.1f}</span>'
+                f'</div></div>',
+                unsafe_allow_html=True,
+            )
+        st.divider()
+
         # ── US Markets ───────────────────────────────────────────────────────
-        st.markdown("### 🇺🇸 שוק ארה\"ב")
+        st.markdown("### 🇺🇸 מדדי ארה\"ב")
         if us_data:
             us_cols = st.columns(len(us_data))
             for ci, (name, data) in enumerate(us_data.items()):
                 us_cols[ci].markdown(_mkt_card(name, data), unsafe_allow_html=True)
 
-            # Per-index analysis
-            st.markdown("#### ניתוח טכני — מדדי ארה\"ב")
+            st.markdown("#### ניתוח טכני מפורט")
             for name, analysis in us_analyses.items():
-                with st.expander(f"📈 {name} — ניתוח מפורט", expanded=False):
+                with st.expander(f"📈 {name}", expanded=False):
                     d = us_data.get(name, {})
                     a1, a2, a3, a4 = st.columns(4)
-                    if d.get("pct_1w") is not None:
-                        a1.metric("שבוע", f"{d['pct_1w']:+.2f}%")
-                    if d.get("pct_1m") is not None:
-                        a2.metric("חודש", f"{d['pct_1m']:+.2f}%")
-                    if d.get("pct_3m") is not None:
-                        a3.metric("3 חודשים", f"{d['pct_3m']:+.2f}%")
-                    a4.metric("מהשיא", f"{d.get('pct_from_hi', 0):.1f}%")
+                    if d.get("pct_1w") is not None: a1.metric("שבוע", f"{d['pct_1w']:+.2f}%")
+                    if d.get("pct_1m") is not None: a2.metric("חודש", f"{d['pct_1m']:+.2f}%")
+                    if d.get("pct_3m") is not None: a3.metric("3 חודשים", f"{d['pct_3m']:+.2f}%")
+                    a4.metric("מהשיא", f"{d.get('pct_from_hi',0):.1f}%")
                     st.markdown(analysis)
+
+        # ── US News ──────────────────────────────────────────────────────────
+        if us_news:
+            st.markdown("#### 📰 חדשות שוק ארה\"ב אחרונות")
+            pos = [n for n in us_news if n["sentiment"] == "positive"]
+            neg = [n for n in us_news if n["sentiment"] == "negative"]
+            neu = [n for n in us_news if n["sentiment"] == "neutral"]
+            nc1, nc2 = st.columns(2)
+            with nc1:
+                if pos:
+                    st.markdown("**🟢 חדשות חיוביות**")
+                    for n in pos[:4]:
+                        date_str = datetime.fromtimestamp(n["pub_ts"]).strftime("%d/%m") if n.get("pub_ts") else ""
+                        st.markdown(
+                            f'<div class="news-positive"><span style="font-size:0.7rem;'
+                            f'color:#8B949E">{date_str} | {n["publisher"]}</span><br>'
+                            f'<span style="font-size:0.85rem">{n["title"]}</span></div>',
+                            unsafe_allow_html=True)
+            with nc2:
+                if neg:
+                    st.markdown("**🔴 חדשות שליליות**")
+                    for n in neg[:4]:
+                        date_str = datetime.fromtimestamp(n["pub_ts"]).strftime("%d/%m") if n.get("pub_ts") else ""
+                        st.markdown(
+                            f'<div class="news-negative"><span style="font-size:0.7rem;'
+                            f'color:#8B949E">{date_str} | {n["publisher"]}</span><br>'
+                            f'<span style="font-size:0.85rem">{n["title"]}</span></div>',
+                            unsafe_allow_html=True)
 
         st.divider()
 
@@ -646,30 +754,39 @@ try:
             for ci, (name, data) in enumerate(il_data.items()):
                 il_cols[ci].markdown(_mkt_card(name, data), unsafe_allow_html=True)
 
-            # Per-index analysis
-            st.markdown("#### ניתוח טכני — מדדי ת\"א")
+            st.markdown("#### ניתוח טכני מפורט")
             for name, analysis in il_analyses.items():
-                with st.expander(f"🇮🇱 {name} — ניתוח מפורט", expanded=False):
+                with st.expander(f"🇮🇱 {name}", expanded=False):
                     d = il_data.get(name, {})
                     b1, b2, b3, b4 = st.columns(4)
-                    if d.get("pct_1w") is not None:
-                        b1.metric("שבוע", f"{d['pct_1w']:+.2f}%")
-                    if d.get("pct_1m") is not None:
-                        b2.metric("חודש", f"{d['pct_1m']:+.2f}%")
-                    if d.get("pct_3m") is not None:
-                        b3.metric("3 חודשים", f"{d['pct_3m']:+.2f}%")
-                    b4.metric("מהשיא", f"{d.get('pct_from_hi', 0):.1f}%")
+                    if d.get("pct_1w") is not None: b1.metric("שבוע", f"{d['pct_1w']:+.2f}%")
+                    if d.get("pct_1m") is not None: b2.metric("חודש", f"{d['pct_1m']:+.2f}%")
+                    if d.get("pct_3m") is not None: b3.metric("3 חודשים", f"{d['pct_3m']:+.2f}%")
+                    b4.metric("מהשיא", f"{d.get('pct_from_hi',0):.1f}%")
                     st.markdown(analysis)
+
+        # ── Israeli News ──────────────────────────────────────────────────────
+        if il_news:
+            st.markdown("#### 📰 חדשות שוק ישראל אחרונות")
+            for n in il_news[:6]:
+                date_str = datetime.fromtimestamp(n["pub_ts"]).strftime("%d/%m") if n.get("pub_ts") else ""
+                css = {"positive": "news-positive", "negative": "news-negative"}.get(n["sentiment"], "news-neutral")
+                emoji = {"positive": "🟢", "negative": "🔴"}.get(n["sentiment"], "⚪")
+                st.markdown(
+                    f'<div class="{css}"><span style="font-size:0.7rem;color:#8B949E">'
+                    f'{emoji} {date_str} | {n["publisher"]}</span><br>'
+                    f'<span style="font-size:0.85rem">{n["title"]}</span></div>',
+                    unsafe_allow_html=True)
 
         st.divider()
 
-        # ── Macro context ────────────────────────────────────────────────────
+        # ── Macro context ─────────────────────────────────────────────────────
         if macro_data:
             st.markdown("### 🌍 הקשר מאקרו")
             mc_cols = st.columns(len(macro_data))
             for ci, (name, data) in enumerate(macro_data.items()):
                 mc_cols[ci].markdown(_mkt_card(name, data), unsafe_allow_html=True)
-            st.caption("💡 זהב עולה = חיפוש מקלט בטוח | תשואות אגח עולות = לחץ על מניות צמיחה | נפט = אינפלציה")
+            st.caption("💡 זהב עולה = חיפוש מקלט בטוח | תשואות אג\"ח עולות = לחץ על מניות צמיחה | נפט = אינפלציה")
 
     st.divider()
 
