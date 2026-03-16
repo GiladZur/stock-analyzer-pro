@@ -1,0 +1,18 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Stock Analyzer Pro",
+      "runtimeExecutable": "C:/Users/HP/Downloads/stock_market_analisys/STOCKS_ANALYZER/.venv/Scripts/streamlit.exe",
+      "runtimeArgs": [
+        "run", "app.py",
+        "--server.port", "8501",
+        "--server.headless", "false",
+        "--browser.gatherUsageStats", "false",
+        "--theme.base", "dark",
+        "--theme.primaryColor", "#00d4a0"
+      ],
+      "port": 8501
+    }
+  ]
+}
