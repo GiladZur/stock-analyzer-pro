@@ -21,7 +21,7 @@ st.set_page_config(
 
 # ─── Imports ──────────────────────────────────────────────────────────────────
 from config import (
-    ANTHROPIC_API_KEY, OPENAI_API_KEY, GROQ_API_KEY,
+    ANTHROPIC_API_KEY, GROQ_API_KEY,
     DEFAULT_PERIOD, EXTENDED_PERIOD,
     POPULAR_IL_STOCKS, TASE_POPULAR, APP_TITLE,
 )
@@ -37,6 +37,11 @@ from charts.plotly_charts import (
     make_full_technical_chart,
 )
 from utils.pdf_report import build_pdf_report
+try:
+    from charts.market_charts import make_market_gauge, make_fear_greed_gauge, make_sector_heatmap
+    _MARKET_CHARTS_OK = True
+except Exception:
+    _MARKET_CHARTS_OK = False
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -414,6 +419,33 @@ def _fetch_market_overview():
     return get_market_overview()
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_us_sectors(sp_pct_1w: float = 0):
+    try:
+        from data.sector_analysis import get_us_sector_analysis
+        return get_us_sector_analysis(sp_pct_1w)
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_il_sectors():
+    try:
+        from data.sector_analysis import get_il_sector_analysis
+        return get_il_sector_analysis()
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _fetch_macro():
+    try:
+        from data.macro_data import get_all_macro
+        return get_all_macro()
+    except Exception:
+        return {}
+
+
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 
 with st.sidebar:
@@ -449,13 +481,12 @@ with st.sidebar:
     run_ai = st.toggle(
         "הפעל ניתוח AI",
         value=True,
-        help="נדרש API key של הספק הנבחר ב-.env",
+        help="נדרש API key מוגדר ב-.env או Streamlit Secrets",
     )
 
-    # Provider selection
+    # Provider selection (OpenAI removed)
     _provider_options = {
         "claude": "🤖 Claude (Anthropic)",
-        "openai": "🤖 GPT-4o-mini (OpenAI)",
         "groq": "⚡ Llama 3 (Groq - חינם)",
     }
     ai_provider = st.selectbox(
@@ -465,26 +496,15 @@ with st.sidebar:
         help="בחר את ספק הAI המועדף",
     )
 
-    # API key input for selected provider
-    _default_keys = {"claude": ANTHROPIC_API_KEY, "openai": OPENAI_API_KEY, "groq": GROQ_API_KEY}
-    _placeholders = {
-        "claude": "sk-ant-...",
-        "openai": "sk-...",
-        "groq": "gsk_...",
-    }
-    _sidebar_key = st.text_input(
-        f"API Key ({_provider_options[ai_provider].split(' ')[1]})",
-        value=_default_keys.get(ai_provider, ""),
-        type="password",
-        placeholder=_placeholders.get(ai_provider, ""),
-        help="ניתן גם להגדיר ב-.env",
-    )
-    # Use sidebar key if provided, else fall back to env
-    ai_api_key = _sidebar_key.strip() if _sidebar_key.strip() else _default_keys.get(ai_provider, "")
+    # API key is loaded securely from .env / Streamlit Secrets — never shown in UI
+    _provider_keys = {"claude": ANTHROPIC_API_KEY, "groq": GROQ_API_KEY}
+    ai_api_key = _provider_keys.get(ai_provider, "")
 
     if run_ai and not ai_api_key:
-        st.warning(f"⚠️ API Key חסר עבור {_provider_options[ai_provider]}  \nהניתוח האלגוריתמי יעבוד ללא AI.")
+        st.warning(f"⚠️ API Key חסר עבור {_provider_options[ai_provider]}  \nהגדר אותו ב-.env (מקומי) או Streamlit Secrets (ענן).")
         run_ai = False
+    elif run_ai:
+        st.success("✅ API Key מוגדר", icon="🔐")
 
     st.divider()
 
@@ -539,6 +559,7 @@ def _mkt_price_str(name: str, price: float) -> str:
         return f"{price:,.2f}"
     return f"{price:.2f}"
 
+
 def _mkt_card(name: str, data: dict) -> str:
     """Render a single index card as HTML."""
     price = data.get("price", 0)
@@ -559,7 +580,7 @@ def _mkt_card(name: str, data: dict) -> str:
         price_str = f'<span style="color:#E6EDF3;font-size:1.2rem;font-weight:800">{_mkt_price_str(name, price)}</span>'
 
     # Trend dot
-    if above200 is True:   trend_dot = '<span style="color:#00d4a0">●</span>'
+    if above200 is True:    trend_dot = '<span style="color:#00d4a0">●</span>'
     elif above200 is False: trend_dot = '<span style="color:#ff4b4b">●</span>'
     else:                   trend_dot = '<span style="color:#888">●</span>'
 
@@ -577,83 +598,236 @@ def _mkt_card(name: str, data: dict) -> str:
         f'</div>'
     )
 
+
+def _macro_mini_card(label: str, value, unit: str = "", fmt: str = ".2f") -> str:
+    """Small inline macro metric card."""
+    if value is None:
+        return ""
+    try:
+        val_str = f"{float(value):{fmt}}{unit}"
+    except Exception:
+        val_str = str(value)
+    return (
+        f'<div style="display:inline-block;background:#161B22;border:1px solid #30363d;'
+        f'border-radius:8px;padding:8px 14px;margin:3px;text-align:center;min-width:90px">'
+        f'<div style="color:#8B949E;font-size:0.68rem;text-transform:uppercase;'
+        f'letter-spacing:0.05em;margin-bottom:2px">{label}</div>'
+        f'<div style="color:#E6EDF3;font-size:1rem;font-weight:700">{val_str}</div>'
+        f'</div>'
+    )
+
+
 try:
     market_data = _fetch_market_overview()
     st.session_state["market_data"] = market_data
 
-    mkt_color    = market_data.get("color", "#888888")
-    mkt_condition= market_data.get("condition", "")
-    mkt_score    = market_data.get("score", 5.0)
-    mkt_summary  = market_data.get("summary", "")
-    us_data      = market_data.get("us", {})
-    il_data      = market_data.get("il", {})
-    macro_data   = market_data.get("macro", {})
-    us_analyses  = market_data.get("us_analyses", {})
-    il_analyses  = market_data.get("il_analyses", {})
+    mkt_color     = market_data.get("color", "#888888")
+    mkt_condition = market_data.get("condition", "")
+    mkt_score     = market_data.get("score", 5.0)
+    mkt_summary   = market_data.get("summary", "")
+    us_data       = market_data.get("us", {})
+    il_data       = market_data.get("il", {})
+    macro_data    = market_data.get("macro", {})
+    us_analyses   = market_data.get("us_analyses", {})
+    il_analyses   = market_data.get("il_analyses", {})
+    fear_greed    = market_data.get("fear_greed", {})
+    breakdown     = market_data.get("breakdown", [])
+    us_news       = market_data.get("us_news", [])
+    il_news       = market_data.get("il_news", [])
 
-    # ── Header bar ──────────────────────────────────────────────────────────
-    score_bar_w = int(mkt_score / 10 * 100)
+    # New keys (with graceful fallback to legacy values)
+    us_score      = market_data.get("us_score", mkt_score)
+    il_score      = market_data.get("il_score", 5.0)
+    us_condition  = market_data.get("us_condition", mkt_condition)
+    il_condition  = market_data.get("il_condition", "שוק ניטרלי ⚖️")
+    us_color      = market_data.get("us_color", mkt_color)
+    il_color      = market_data.get("il_color", "#888888")
+    us_breakdown  = market_data.get("us_breakdown", breakdown)
+    il_breakdown  = market_data.get("il_breakdown", [])
+    us_sectors    = market_data.get("us_sectors", [])
+    il_sectors    = market_data.get("il_sectors", [])
+    macro_ext     = market_data.get("macro_ext", {})
+    top_opportunities = market_data.get("top_opportunities", [])
+    us_breadth    = market_data.get("us_breadth")
+    il_breadth    = market_data.get("il_breadth")
+    top_sector_us = market_data.get("top_sector_us")
+    top_sector_il = market_data.get("top_sector_il")
+
+    # ── ROW 1: MARKET PULSE header ───────────────────────────────────────────
     st.markdown(
-        f'<div style="background:#161B22;border:1px solid {mkt_color}44;border-radius:12px;'
-        f'padding:16px 22px;margin-bottom:10px;">'
-        f'<div style="display:flex;justify-content:space-between;align-items:center">'
-        f'<span style="color:{mkt_color};font-size:1.15rem;font-weight:800">🌐 מצב שוק: {mkt_condition}</span>'
-        f'<span style="color:#8B949E;font-size:0.9rem">ציון בריאות: '
-        f'<b style="color:{mkt_color};font-size:1.1rem">{mkt_score}/10</b></span>'
-        f'</div>'
-        f'<div style="background:#0E1117;border-radius:6px;height:6px;margin-top:8px">'
-        f'<div style="background:{mkt_color};width:{score_bar_w}%;height:100%;border-radius:6px"></div>'
-        f'</div>'
-        f'</div>',
+        '<div style="background:#161B22;border:1px solid #30363d;border-radius:12px;'
+        'padding:10px 20px;margin-bottom:8px;">'
+        '<span style="color:#58A6FF;font-size:1.1rem;font-weight:800;letter-spacing:0.08em">'
+        '🌐 MARKET PULSE</span>'
+        '<span style="color:#8B949E;font-size:0.8rem;margin-right:12px"> — דשבורד שוק בזמן אמת</span>'
+        '</div>',
         unsafe_allow_html=True,
     )
 
-    fear_greed  = market_data.get("fear_greed", {})
-    breakdown   = market_data.get("breakdown", [])
-    us_news     = market_data.get("us_news", [])
-    il_news     = market_data.get("il_news", [])
+    # Three gauges: US | Fear & Greed | IL
+    pulse_c1, pulse_c2, pulse_c3 = st.columns(3)
 
-    # ── Fear & Greed widget (always visible) ─────────────────────────────────
-    fg_score  = fear_greed.get("score", 50)
-    fg_color  = fear_greed.get("color", "#888")
-    fg_rating = fear_greed.get("rating", "")
-    fg_src    = fear_greed.get("source", "")
-    fg_p1w    = fear_greed.get("prev_1w")
-    fg_p1m    = fear_greed.get("prev_1m")
-    fg_he     = _fg_label_he(fg_rating) if fg_rating else ""
+    with pulse_c1:
+        if _MARKET_CHARTS_OK:
+            fg_us = make_market_gauge(
+                us_score,
+                "🇺🇸 שוק ארה\"ב",
+                us_condition,
+            )
+            st.plotly_chart(fg_us, use_container_width=True, key="gauge_us")
+        else:
+            st.metric("🇺🇸 ציון ארה\"ב", f"{us_score}/10")
+        # Key factors under gauge
+        sp = us_data.get("S&P 500", {})
+        vix_d = us_data.get("VIX", {})
+        vix_v = vix_d.get("price", 20)
+        sp_pct = sp.get("pct_1d", 0)
+        sp_clr = "#00d4a0" if sp_pct >= 0 else "#ff4b4b"
+        vix_clr = "#00d4a0" if vix_v < 20 else "#ff8844" if vix_v < 30 else "#ff4b4b"
+        st.markdown(
+            f'<div style="text-align:center;font-size:0.8rem;color:#8B949E;">'
+            f'S&P 500: <span style="color:{sp_clr};font-weight:700">{sp_pct:+.2f}%</span>'
+            f' &nbsp;|&nbsp; VIX: <span style="color:{vix_clr};font-weight:700">{vix_v:.1f}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        if top_sector_us:
+            st.markdown(
+                f'<div style="text-align:center;font-size:0.75rem;color:#8B949E;margin-top:2px">'
+                f'סקטור מוביל: <span style="color:#00d4a0">{top_sector_us.get("emoji","")} {top_sector_us.get("he","")}</span>'
+                f' ({top_sector_us.get("pct_1w",0):+.1f}% שבוע)</div>',
+                unsafe_allow_html=True,
+            )
 
-    fg_bar_w  = int(fg_score)
-    fg_trend  = ""
-    if fg_p1w is not None:
-        diff = fg_score - fg_p1w
-        fg_trend = f"vs שבוע שעבר: {fg_p1w:.0f} ({'▲' if diff>=0 else '▼'}{abs(diff):.0f})"
+    with pulse_c2:
+        fg_score  = fear_greed.get("score", 50)
+        fg_rating = fear_greed.get("rating", "")
+        fg_he     = _fg_label_he(fg_rating) if fg_rating else "ניטרלי"
+        fg_color  = fear_greed.get("color", "#888")
+        fg_src    = fear_greed.get("source", "")
+        if _MARKET_CHARTS_OK:
+            fg_gauge = make_fear_greed_gauge(fg_score, fg_he)
+            st.plotly_chart(fg_gauge, use_container_width=True, key="gauge_fg")
+        else:
+            st.metric("🧠 Fear & Greed", f"{fg_score:.0f}/100")
+        fg_p1w = fear_greed.get("prev_1w")
+        fg_p1m = fear_greed.get("prev_1m")
+        trend_str = ""
+        if fg_p1w is not None:
+            diff = fg_score - fg_p1w
+            trend_str = f" vs שבוע: {'▲' if diff>=0 else '▼'}{abs(diff):.0f}"
+        st.markdown(
+            f'<div style="text-align:center;font-size:0.8rem;">'
+            f'<span style="color:{fg_color};font-weight:700">{fg_he}</span>'
+            f'<span style="color:#8B949E;font-size:0.72rem"> ({fg_src}{trend_str})</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        if fg_p1w is not None and fg_p1m is not None:
+            fg_mc1, fg_mc2 = st.columns(2)
+            fg_mc1.metric("לפני שבוע", f"{fg_p1w:.0f}", f"{fg_score-fg_p1w:+.0f}")
+            fg_mc2.metric("לפני חודש", f"{fg_p1m:.0f}", f"{fg_score-fg_p1m:+.0f}")
 
-    fg_html = (
-        f'<div style="background:#161B22;border:1px solid {fg_color}55;border-radius:10px;'
-        f'padding:14px 20px;margin-bottom:8px;">'
-        f'<div style="display:flex;justify-content:space-between;align-items:center">'
-        f'<span style="color:#E6EDF3;font-weight:700;font-size:1rem">🧠 Fear & Greed Index '
-        f'<span style="color:#8B949E;font-size:0.75rem">({fg_src})</span></span>'
-        f'<span style="color:{fg_color};font-size:1.4rem;font-weight:900">{fg_score:.0f}/100</span>'
-        f'</div>'
-        f'<div style="color:{fg_color};font-weight:700;margin:4px 0">{fg_he}</div>'
-        f'<div style="background:#0E1117;border-radius:6px;height:10px;margin:6px 0">'
-        f'<div style="background:linear-gradient(90deg,#00d4a0,#ffcc00,#ff4b4b);'
-        f'width:{fg_bar_w}%;height:100%;border-radius:6px;position:relative">'
-        f'<div style="position:absolute;right:-4px;top:-3px;width:16px;height:16px;'
-        f'background:{fg_color};border-radius:50%;border:2px solid #0E1117"></div>'
-        f'</div></div>'
-        f'<div style="display:flex;justify-content:space-between;'
-        f'font-size:0.65rem;color:#555;margin-top:2px">'
-        f'<span>0 — פחד קיצוני</span><span>50 — ניטרלי</span><span>100 — חמדנות קיצונית</span>'
-        f'</div>'
-        f'{"<div style=color:#8B949E;font-size:0.75rem;margin-top:4px>" + fg_trend + "</div>" if fg_trend else ""}'
-        f'</div>'
-    )
-    st.markdown(fg_html, unsafe_allow_html=True)
+    with pulse_c3:
+        if _MARKET_CHARTS_OK:
+            fg_il = make_market_gauge(
+                il_score,
+                "🇮🇱 שוק ישראל",
+                il_condition,
+            )
+            st.plotly_chart(fg_il, use_container_width=True, key="gauge_il")
+        else:
+            st.metric("🇮🇱 ציון ישראל", f"{il_score}/10")
+        ta = il_data.get("TA-35", {})
+        ta_pct = ta.get("pct_1d", 0)
+        ils_d = il_data.get("USD/ILS", {})
+        ils_p = ils_d.get("price")
+        ta_clr = "#00d4a0" if ta_pct >= 0 else "#ff4b4b"
+        st.markdown(
+            f'<div style="text-align:center;font-size:0.8rem;color:#8B949E;">'
+            f'TA-35: <span style="color:{ta_clr};font-weight:700">{ta_pct:+.2f}%</span>'
+            + (f' &nbsp;|&nbsp; USD/ILS: <span style="color:#E6EDF3;font-weight:700">{ils_p:.3f}</span>'
+               if ils_p else '')
+            + f'</div>',
+            unsafe_allow_html=True,
+        )
+        if top_sector_il:
+            st.markdown(
+                f'<div style="text-align:center;font-size:0.75rem;color:#8B949E;margin-top:2px">'
+                f'סקטור מוביל: <span style="color:#00d4a0">{top_sector_il.get("emoji","")} {top_sector_il.get("name","")}</span>'
+                f' ({top_sector_il.get("pct_1w",0):+.1f}% שבוע)</div>',
+                unsafe_allow_html=True,
+            )
 
-    # ── Main expander ────────────────────────────────────────────────────────
-    with st.expander("📊 פירוט מלא — ניתוח שוק, חדשות וציון", expanded=True):
+    # ── ROW 2: Macro bar ─────────────────────────────────────────────────────
+    # Gather macro data from both sources
+    vix_val_macro = us_data.get("VIX", {}).get("price")
+    fed_rate   = macro_ext.get("fed_rate")
+    boi_rate   = macro_ext.get("boi_rate")
+    us_10y     = macro_ext.get("us_10y")
+    il_10y     = macro_ext.get("il_10y")
+    usd_ils    = macro_ext.get("usd_ils")
+
+    macro_cards_html = ""
+    macro_cards_html += _macro_mini_card("Fed Rate (T-Bill)", fed_rate, "%", ".2f")
+    macro_cards_html += _macro_mini_card("BOI Rate", boi_rate, "%", ".2f")
+    macro_cards_html += _macro_mini_card("US 10Y", us_10y, "%", ".2f")
+    macro_cards_html += _macro_mini_card("IL 10Y", il_10y, "%", ".2f")
+    macro_cards_html += _macro_mini_card("USD/ILS", usd_ils, "", ".3f")
+    if vix_val_macro is not None:
+        macro_cards_html += _macro_mini_card("VIX", vix_val_macro, "", ".1f")
+    # Add Gold and Oil from legacy macro
+    gold_d = macro_data.get("זהב", {})
+    oil_d  = macro_data.get("נפט (WTI)", {})
+    if gold_d.get("price"):
+        macro_cards_html += _macro_mini_card("Gold", gold_d["price"], "$", ",.0f")
+    if oil_d.get("price"):
+        macro_cards_html += _macro_mini_card("Oil (WTI)", oil_d["price"], "$", ".2f")
+
+    if macro_cards_html:
+        st.markdown(
+            f'<div style="background:#0E1117;border-radius:10px;padding:10px 14px;'
+            f'margin:6px 0;display:flex;flex-wrap:wrap;gap:4px;align-items:center">'
+            f'<span style="color:#8B949E;font-size:0.72rem;font-weight:600;'
+            f'text-transform:uppercase;margin-left:8px">MACRO</span>'
+            f'{macro_cards_html}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── ROW 3: AI Top Opportunities (always visible if any picks) ────────────
+    if top_opportunities:
+        st.markdown("### 🎯 הזדמנויות מובילות — ניתוח סקטוריאלי")
+        opp_cols = st.columns(min(3, len(top_opportunities)))
+        for oi, opp in enumerate(top_opportunities[:3]):
+            with opp_cols[oi % len(opp_cols)]:
+                opp_clr = "#00d4a0" if opp["combined_score"] >= 7 else "#ff8844" if opp["combined_score"] >= 5.5 else "#888"
+                pct_clr = "#00d4a0" if opp.get("pct_1w", 0) >= 0 else "#ff4b4b"
+                st.markdown(
+                    f'<div style="background:#161B22;border:1px solid {opp_clr}55;'
+                    f'border-radius:10px;padding:14px 16px;margin:4px 0;'
+                    f'border-top:3px solid {opp_clr}">'
+                    f'<div style="font-size:1.1rem;font-weight:800;color:#E6EDF3;margin-bottom:4px">'
+                    f'{opp.get("emoji","")} {opp["sector"]} &nbsp;'
+                    f'<span style="font-size:0.75rem;color:#8B949E">{opp["market"]}</span>'
+                    f'</div>'
+                    f'<div style="display:flex;justify-content:space-between;margin-bottom:6px">'
+                    f'<span style="color:{opp_clr};font-size:1.2rem;font-weight:800">'
+                    f'{opp["combined_score"]}/10</span>'
+                    f'<span style="color:{pct_clr};font-size:0.9rem;font-weight:700">'
+                    f'{opp.get("pct_1w", 0):+.1f}% שבוע</span>'
+                    f'</div>'
+                    f'<div style="color:#8B949E;font-size:0.78rem;line-height:1.5;direction:rtl">'
+                    f'{opp.get("reasoning","")}</div>'
+                    + (f'<div style="color:#ff8844;font-size:0.72rem;margin-top:6px">'
+                       f'{opp.get("caution","")}</div>'
+                       if opp.get("caution") else "")
+                    + f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+    # ── ROW 4: Full analysis expander ────────────────────────────────────────
+    with st.expander("📊 ניתוח שוק מלא — מדדים, סקטורים, חדשות", expanded=False):
 
         # Summary
         st.markdown(mkt_summary)
@@ -667,39 +841,88 @@ try:
                 f'<div class="analysis-box">{fg_exp}</div>',
                 unsafe_allow_html=True,
             )
-            if fg_p1w is not None and fg_p1m is not None:
-                fg_c1, fg_c2, fg_c3 = st.columns(3)
-                fg_c1.metric("ציון נוכחי", f"{fg_score:.0f}")
-                fg_c2.metric("לפני שבוע",  f"{fg_p1w:.0f}", f"{fg_score-fg_p1w:+.0f}")
-                fg_c3.metric("לפני חודש",  f"{fg_p1m:.0f}", f"{fg_score-fg_p1m:+.0f}")
         st.divider()
 
-        # ── Score breakdown ───────────────────────────────────────────────────
-        st.markdown("### 📋 פירוט ציון מצב השוק — למה קיבל את הציון הזה?")
-        st.caption(f"ציון סופי: **{mkt_score}/10** (בסיס: 5.0)")
-        running = 5.0
-        for item in breakdown:
-            pts  = item["points"]
-            fac  = item["factor"]
-            exp  = item["explanation"]
-            running += pts
-            clr  = "#00d4a0" if pts > 0 else "#ff4b4b" if pts < 0 else "#888888"
-            sign = "+" if pts >= 0 else ""
-            st.markdown(
-                f'<div style="display:flex;align-items:flex-start;gap:12px;'
-                f'background:#161B22;border-radius:8px;padding:8px 14px;margin:4px 0;'
-                f'border-left:3px solid {clr}">'
-                f'<span style="color:{clr};font-weight:800;min-width:52px;'
-                f'font-size:1rem">{sign}{pts:.1f}</span>'
-                f'<div><b style="color:#E6EDF3">{fac}</b><br>'
-                f'<span style="color:#8B949E;font-size:0.82rem">{exp}</span>'
-                f'<span style="color:{clr};font-size:0.78rem;margin-right:10px"> → סה"כ: {running:.1f}</span>'
-                f'</div></div>',
-                unsafe_allow_html=True,
-            )
+        # ── Score breakdowns ──────────────────────────────────────────────────
+        bd_tab_us, bd_tab_il = st.tabs(["🇺🇸 פירוט ציון ארה\"ב", "🇮🇱 פירוט ציון ישראל"])
+
+        def _render_breakdown(score_val, bd_list, label):
+            st.caption(f"ציון {label}: **{score_val}/10** (בסיס: 5.0)")
+            running = 5.0
+            for item in bd_list:
+                pts = item["points"]
+                fac = item["factor"]
+                exp = item["explanation"]
+                running += pts
+                clr  = "#00d4a0" if pts > 0 else "#ff4b4b" if pts < 0 else "#888888"
+                sign = "+" if pts >= 0 else ""
+                st.markdown(
+                    f'<div style="display:flex;align-items:flex-start;gap:12px;'
+                    f'background:#161B22;border-radius:8px;padding:8px 14px;margin:4px 0;'
+                    f'border-left:3px solid {clr}">'
+                    f'<span style="color:{clr};font-weight:800;min-width:52px;'
+                    f'font-size:1rem">{sign}{pts:.1f}</span>'
+                    f'<div><b style="color:#E6EDF3">{fac}</b><br>'
+                    f'<span style="color:#8B949E;font-size:0.82rem">{exp}</span>'
+                    f'<span style="color:{clr};font-size:0.78rem;margin-right:10px">'
+                    f' → סה"כ: {running:.1f}</span>'
+                    f'</div></div>',
+                    unsafe_allow_html=True,
+                )
+
+        with bd_tab_us:
+            _render_breakdown(us_score, us_breakdown, "ארה\"ב")
+        with bd_tab_il:
+            _render_breakdown(il_score, il_breakdown, "ישראל")
+
         st.divider()
 
-        # ── US Markets ───────────────────────────────────────────────────────
+        # ── Sector Heatmaps ───────────────────────────────────────────────────
+        if us_sectors or il_sectors:
+            st.markdown("### 📊 ביצועי סקטורים שבועיים")
+            sec_c1, sec_c2 = st.columns(2)
+            with sec_c1:
+                if us_sectors and _MARKET_CHARTS_OK:
+                    fig_us_sec = make_sector_heatmap(us_sectors, "🇺🇸 סקטורים ארה\"ב — ביצוע שבועי")
+                    if fig_us_sec:
+                        st.plotly_chart(fig_us_sec, use_container_width=True, key="heatmap_us")
+                elif us_sectors:
+                    st.markdown("**🇺🇸 סקטורים ארה\"ב**")
+                    for s in us_sectors:
+                        clr = "#00d4a0" if s.get("pct_1w", 0) >= 0 else "#ff4b4b"
+                        st.markdown(
+                            f'<span style="color:{clr}">{s.get("emoji","")} {s.get("he","")} '
+                            f'{s.get("pct_1w",0):+.1f}%</span>',
+                            unsafe_allow_html=True,
+                        )
+            with sec_c2:
+                if il_sectors and _MARKET_CHARTS_OK:
+                    fig_il_sec = make_sector_heatmap(il_sectors, "🇮🇱 סקטורים ישראל — ביצוע שבועי")
+                    if fig_il_sec:
+                        st.plotly_chart(fig_il_sec, use_container_width=True, key="heatmap_il")
+                elif il_sectors:
+                    st.markdown("**🇮🇱 סקטורים ישראל**")
+                    for s in il_sectors:
+                        clr = "#00d4a0" if s.get("pct_1w", 0) >= 0 else "#ff4b4b"
+                        st.markdown(
+                            f'<span style="color:{clr}">{s.get("emoji","")} {s.get("name","")} '
+                            f'{s.get("pct_1w",0):+.1f}%</span>',
+                            unsafe_allow_html=True,
+                        )
+
+            # Breadth metrics
+            if us_breadth is not None or il_breadth is not None:
+                br_c1, br_c2, br_c3, br_c4 = st.columns(4)
+                if us_breadth is not None:
+                    br_c1.metric("רוחב שוק ארה\"ב", f"{us_breadth:.0f}%",
+                                 help="% סקטורים עם ביצוע חיובי השבוע")
+                if il_breadth is not None:
+                    br_c2.metric("רוחב שוק ישראל", f"{il_breadth:.0f}%",
+                                 help="% סקטורים עם ביצוע חיובי השבוע")
+
+        st.divider()
+
+        # ── US Markets ────────────────────────────────────────────────────────
         st.markdown("### 🇺🇸 מדדי ארה\"ב")
         if us_data:
             us_cols = st.columns(len(us_data))
@@ -717,37 +940,40 @@ try:
                     a4.metric("מהשיא", f"{d.get('pct_from_hi',0):.1f}%")
                     st.markdown(analysis)
 
-        # ── US News ──────────────────────────────────────────────────────────
+        # ── US News ───────────────────────────────────────────────────────────
         if us_news:
-            st.markdown("#### 📰 חדשות שוק ארה\"ב אחרונות")
+            st.markdown("#### 📰 חדשות שוק ארה\"ב")
             pos = [n for n in us_news if n["sentiment"] == "positive"]
             neg = [n for n in us_news if n["sentiment"] == "negative"]
-            neu = [n for n in us_news if n["sentiment"] == "neutral"]
             nc1, nc2 = st.columns(2)
             with nc1:
                 if pos:
                     st.markdown("**🟢 חדשות חיוביות**")
-                    for n in pos[:4]:
+                    for n in sorted(pos, key=lambda x: -x.get("impact", 0))[:4]:
                         date_str = datetime.fromtimestamp(n["pub_ts"]).strftime("%d/%m") if n.get("pub_ts") else ""
+                        imp = n.get("impact", 2)
+                        imp_badge = f'<span style="color:#ffcc00;font-size:0.65rem">★{imp}</span>' if imp >= 6 else ""
                         st.markdown(
                             f'<div class="news-positive"><span style="font-size:0.7rem;'
-                            f'color:#8B949E">{date_str} | {n["publisher"]}</span><br>'
+                            f'color:#8B949E">{date_str} | {n["publisher"]} {imp_badge}</span><br>'
                             f'<span style="font-size:0.85rem">{n["title"]}</span></div>',
                             unsafe_allow_html=True)
             with nc2:
                 if neg:
                     st.markdown("**🔴 חדשות שליליות**")
-                    for n in neg[:4]:
+                    for n in sorted(neg, key=lambda x: -x.get("impact", 0))[:4]:
                         date_str = datetime.fromtimestamp(n["pub_ts"]).strftime("%d/%m") if n.get("pub_ts") else ""
+                        imp = n.get("impact", 2)
+                        imp_badge = f'<span style="color:#ffcc00;font-size:0.65rem">★{imp}</span>' if imp >= 6 else ""
                         st.markdown(
                             f'<div class="news-negative"><span style="font-size:0.7rem;'
-                            f'color:#8B949E">{date_str} | {n["publisher"]}</span><br>'
+                            f'color:#8B949E">{date_str} | {n["publisher"]} {imp_badge}</span><br>'
                             f'<span style="font-size:0.85rem">{n["title"]}</span></div>',
                             unsafe_allow_html=True)
 
         st.divider()
 
-        # ── Israeli Market ───────────────────────────────────────────────────
+        # ── Israeli Market ────────────────────────────────────────────────────
         st.markdown("### 🇮🇱 שוק ישראל (ת\"א)")
         if il_data:
             il_cols = st.columns(len(il_data))
@@ -767,14 +993,16 @@ try:
 
         # ── Israeli News ──────────────────────────────────────────────────────
         if il_news:
-            st.markdown("#### 📰 חדשות שוק ישראל אחרונות")
-            for n in il_news[:6]:
+            st.markdown("#### 📰 חדשות שוק ישראל")
+            for n in sorted(il_news[:6], key=lambda x: -x.get("impact", 0)):
                 date_str = datetime.fromtimestamp(n["pub_ts"]).strftime("%d/%m") if n.get("pub_ts") else ""
                 css = {"positive": "news-positive", "negative": "news-negative"}.get(n["sentiment"], "news-neutral")
                 emoji = {"positive": "🟢", "negative": "🔴"}.get(n["sentiment"], "⚪")
+                imp = n.get("impact", 2)
+                imp_badge = f'<span style="color:#ffcc00;font-size:0.65rem">★{imp}</span>' if imp >= 6 else ""
                 st.markdown(
                     f'<div class="{css}"><span style="font-size:0.7rem;color:#8B949E">'
-                    f'{emoji} {date_str} | {n["publisher"]}</span><br>'
+                    f'{emoji} {date_str} | {n["publisher"]} {imp_badge}</span><br>'
                     f'<span style="font-size:0.85rem">{n["title"]}</span></div>',
                     unsafe_allow_html=True)
 

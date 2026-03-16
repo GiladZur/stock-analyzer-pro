@@ -1,9 +1,12 @@
 """
 Market Overview — global & Israeli markets with:
-  • Technical analysis (RSI, MACD, SMA, momentum)
-  • Fear & Greed Index (CNN API + calculated fallback)
-  • Market news (positive / negative)
-  • Score breakdown explaining WHY the score was given
+  * Technical analysis (RSI, MACD, SMA, momentum)
+  * Fear & Greed Index (CNN API + calculated fallback)
+  * Market news (positive / negative)
+  * Score breakdown explaining WHY the score was given
+  * Sector analysis (US + IL)
+  * Macro indicators
+  * AI top opportunities
 """
 import yfinance as yf
 import pandas as pd
@@ -241,6 +244,29 @@ def _classify_news(title: str) -> str:
     if p > n:   return "positive"
     if n > p:   return "negative"
     return "neutral"
+
+
+def _news_impact(title: str) -> int:
+    """Score news impact 1-10."""
+    t = title.lower()
+    if any(w in t for w in [
+        "fed", "interest rate", "rate hike", "rate cut",
+        "earnings beat", "earnings miss", "bankruptcy",
+        "merger", "acquisition", "fomc",
+    ]):
+        return 9
+    if any(w in t for w in [
+        "revenue", "guidance", "forecast", "profit",
+        "loss", "upgrade", "downgrade", "ceo", "layoff",
+        "restructuring",
+    ]):
+        return 6
+    if any(w in t for w in [
+        "product", "launch", "partnership", "contract",
+        "deal", "expansion",
+    ]):
+        return 4
+    return 2
 
 
 # ─── Technical index fetch ────────────────────────────────────────────────────
@@ -494,6 +520,203 @@ def _calc_score_with_breakdown(us_data: dict, il_data: dict,
     return score, breakdown
 
 
+def _calc_us_score(us_data: dict, sectors: list, macro: dict,
+                   fear_greed: dict | None) -> tuple[float, list[dict]]:
+    """US market score 1-10 with breakdown."""
+    score = 5.0
+    breakdown = []
+
+    sp  = us_data.get("S&P 500",    {})
+    nq  = us_data.get("NASDAQ 100", {})
+    vix = us_data.get("VIX",        {})
+    rsl = us_data.get("Russell 2000", {})
+
+    sp_pct  = sp.get("pct_1d", 0)
+    nq_pct  = nq.get("pct_1d", 0)
+    vix_val = vix.get("price", 20)
+    sp_rsi  = sp.get("rsi")
+    sp_m1   = sp.get("pct_1m")
+    sp_a200 = sp.get("above_sma200")
+
+    # Daily performance
+    avg_us = (sp_pct + nq_pct) / 2
+    if   avg_us >  1.5: pts, exp = +2.5, f"S&P+NASDAQ עלו ממוצע {avg_us:+.1f}% — יום חזק מאוד"
+    elif avg_us >  0.5: pts, exp = +1.5, f"S&P+NASDAQ עלו ממוצע {avg_us:+.1f}% — יום חיובי"
+    elif avg_us >  0.1: pts, exp = +0.5, f"S&P+NASDAQ עלו מעט {avg_us:+.1f}%"
+    elif avg_us < -1.5: pts, exp = -2.5, f"S&P+NASDAQ ירדו ממוצע {avg_us:+.1f}% — יום ירידה חריף"
+    elif avg_us < -0.5: pts, exp = -1.5, f"S&P+NASDAQ ירדו ממוצע {avg_us:+.1f}%"
+    elif avg_us < -0.1: pts, exp = -0.5, f"S&P+NASDAQ ירדו מעט {avg_us:+.1f}%"
+    else:               pts, exp = 0.0,  f"S&P+NASDAQ בשינוי זניח ({avg_us:+.2f}%)"
+    score += pts
+    breakdown.append({"factor": "📊 ביצועי יום", "points": pts, "explanation": exp})
+
+    # VIX
+    if   vix_val < 15: pts, exp = +1.5, f"VIX={vix_val:.1f} — שאננות, סביבה חיובית ✅"
+    elif vix_val < 20: pts, exp = +0.5, f"VIX={vix_val:.1f} — נורמלי"
+    elif vix_val < 25: pts, exp =  0.0, f"VIX={vix_val:.1f} — מתון ⚖️"
+    elif vix_val < 30: pts, exp = -1.0, f"VIX={vix_val:.1f} — חרדה ⚠️"
+    elif vix_val < 40: pts, exp = -2.0, f"VIX={vix_val:.1f} — פחד גבוה 🔴"
+    else:              pts, exp = -2.5, f"VIX={vix_val:.1f} — פאניקה! 🚨"
+    score += pts
+    breakdown.append({"factor": "😰 VIX", "points": pts, "explanation": exp})
+
+    # SMA200 trend
+    if sp_a200 is True:
+        pts, exp = +0.5, "S&P 500 מעל SMA200 📈"
+    elif sp_a200 is False:
+        pts, exp = -0.5, "S&P 500 מתחת SMA200 📉"
+    else:
+        pts, exp = 0.0, "SMA200 לא זמין"
+    score += pts
+    breakdown.append({"factor": "📉 מגמה SMA200", "points": pts, "explanation": exp})
+
+    # Monthly momentum
+    if sp_m1 is not None:
+        if   sp_m1 >  8: pts, exp = +1.0, f"מומנטום חודשי {sp_m1:+.1f}% — עלייה חזקה 🚀"
+        elif sp_m1 >  3: pts, exp = +0.5, f"מומנטום חודשי {sp_m1:+.1f}% — חיובי"
+        elif sp_m1 < -8: pts, exp = -1.0, f"מומנטום חודשי {sp_m1:+.1f}% — ירידה חדה 📉"
+        elif sp_m1 < -3: pts, exp = -0.5, f"מומנטום חודשי {sp_m1:+.1f}% — שלילי"
+        else:            pts, exp =  0.0, f"מומנטום חודשי {sp_m1:+.1f}% — מתון"
+        score += pts
+        breakdown.append({"factor": "📅 מומנטום חודשי", "points": pts, "explanation": exp})
+
+    # Sector breadth
+    if sectors:
+        pos_sectors = sum(1 for s in sectors if s.get("pct_1w", 0) > 0)
+        breadth = pos_sectors / len(sectors) * 100
+        if   breadth >= 80: pts, exp = +1.0, f"רוחב שוק חיובי מאוד — {breadth:.0f}% סקטורים עולים"
+        elif breadth >= 60: pts, exp = +0.5, f"רוחב שוק טוב — {breadth:.0f}% סקטורים עולים"
+        elif breadth >= 40: pts, exp =  0.0, f"רוחב שוק מעורב — {breadth:.0f}% סקטורים עולים"
+        elif breadth >= 20: pts, exp = -0.5, f"רוחב שוק חלש — רק {breadth:.0f}% סקטורים עולים"
+        else:               pts, exp = -1.0, f"רוחב שוק שלילי מאוד — {breadth:.0f}% סקטורים עולים"
+        score += pts
+        breakdown.append({"factor": "🌊 רוחב שוק סקטוריאלי", "points": pts, "explanation": exp})
+
+    # Fear & Greed
+    if fear_greed:
+        fg_score = fear_greed.get("score", 50)
+        if   fg_score >= 75: pts, exp = -0.5, f"Fear & Greed={fg_score:.0f} — חמדנות קיצונית ⚠️"
+        elif fg_score >= 55: pts, exp = +0.3, f"Fear & Greed={fg_score:.0f} — אופטימיות"
+        elif fg_score >= 45: pts, exp =  0.0, f"Fear & Greed={fg_score:.0f} — ניטרלי"
+        elif fg_score >= 25: pts, exp = +0.3, f"Fear & Greed={fg_score:.0f} — פחד = הזדמנות"
+        else:                pts, exp = +0.5, f"Fear & Greed={fg_score:.0f} — פחד קיצוני 💡"
+        score += pts
+        breakdown.append({"factor": "🧠 Fear & Greed", "points": pts, "explanation": exp})
+
+    # 10Y yield pressure
+    us_10y = macro.get("us_10y") if macro else None
+    if us_10y is not None:
+        if   us_10y > 5.0: pts, exp = -0.5, f"תשואת 10Y={us_10y:.2f}% — לחץ חזק על מניות צמיחה ⚠️"
+        elif us_10y > 4.5: pts, exp = -0.3, f"תשואת 10Y={us_10y:.2f}% — לחץ מתון"
+        elif us_10y < 3.5: pts, exp = +0.3, f"תשואת 10Y={us_10y:.2f}% — סביבת ריבית נמוכה ✅"
+        else:              pts, exp =  0.0, f"תשואת 10Y={us_10y:.2f}% — ניטרלי"
+        score += pts
+        breakdown.append({"factor": "📊 תשואת אג\"ח 10Y", "points": pts, "explanation": exp})
+
+    score = max(1.0, min(10.0, round(score, 1)))
+    return score, breakdown
+
+
+def _calc_il_score(il_data: dict, il_sectors: list, macro: dict,
+                   fear_greed: dict | None, il_news: list) -> tuple[float, list[dict]]:
+    """Israeli market score 1-10 with breakdown."""
+    score = 5.0
+    breakdown = []
+
+    ta   = il_data.get("TA-35",  {})
+    ta125 = il_data.get("TA-125", {})
+    ils  = il_data.get("USD/ILS", {})
+
+    ta_pct  = ta.get("pct_1d", 0)
+    ta_m1   = ta.get("pct_1m")
+    ta_a200 = ta.get("above_sma200")
+
+    # TA-35 daily performance
+    if   ta_pct >  1.0: pts, exp = +2.0, f"TA-35 עלה {ta_pct:+.1f}% — יום חזק מאוד 🇮🇱"
+    elif ta_pct >  0.3: pts, exp = +1.0, f"TA-35 עלה {ta_pct:+.1f}% — יום חיובי"
+    elif ta_pct >  0.1: pts, exp = +0.3, f"TA-35 עלה מעט {ta_pct:+.1f}%"
+    elif ta_pct < -1.0: pts, exp = -2.0, f"TA-35 ירד {ta_pct:+.1f}% — ירידה חדה 📉"
+    elif ta_pct < -0.3: pts, exp = -1.0, f"TA-35 ירד {ta_pct:+.1f}%"
+    elif ta_pct < -0.1: pts, exp = -0.3, f"TA-35 ירד מעט {ta_pct:+.1f}%"
+    else:               pts, exp =  0.0, f"TA-35 יציב ({ta_pct:+.2f}%)"
+    score += pts
+    breakdown.append({"factor": "🇮🇱 TA-35 ביצוע יומי", "points": pts, "explanation": exp})
+
+    # TA-35 vs SMA200
+    if ta_a200 is True:
+        pts, exp = +0.5, "TA-35 מעל SMA200 — מגמה עולה ארוכת טווח 📈"
+    elif ta_a200 is False:
+        pts, exp = -0.5, "TA-35 מתחת SMA200 — מגמה יורדת ארוכת טווח 📉"
+    else:
+        pts, exp = 0.0, "מיקום SMA200 לא זמין"
+    score += pts
+    breakdown.append({"factor": "📉 מגמה TA-35 (SMA200)", "points": pts, "explanation": exp})
+
+    # Monthly momentum
+    if ta_m1 is not None:
+        if   ta_m1 >  5: pts, exp = +1.0, f"מומנטום חודשי TA-35={ta_m1:+.1f}% — עלייה חזקה 🚀"
+        elif ta_m1 >  2: pts, exp = +0.5, f"מומנטום חודשי TA-35={ta_m1:+.1f}% — חיובי"
+        elif ta_m1 < -5: pts, exp = -1.0, f"מומנטום חודשי TA-35={ta_m1:+.1f}% — ירידה חדה 📉"
+        elif ta_m1 < -2: pts, exp = -0.5, f"מומנטום חודשי TA-35={ta_m1:+.1f}% — שלילי"
+        else:            pts, exp =  0.0, f"מומנטום חודשי TA-35={ta_m1:+.1f}% — מתון"
+        score += pts
+        breakdown.append({"factor": "📅 מומנטום חודשי TA-35", "points": pts, "explanation": exp})
+
+    # USD/ILS trend (ILS strengthening = positive for local market)
+    ils_pct = ils.get("pct_1w")
+    if ils_pct is not None:
+        # ILS=X is USD/ILS, so lower = ILS stronger
+        if   ils_pct < -1.0: pts, exp = +0.5, f"שקל התחזק {abs(ils_pct):.1f}% השבוע — חיובי לשוק הישראלי ✅"
+        elif ils_pct < -0.3: pts, exp = +0.2, f"שקל התחזק מעט {abs(ils_pct):.1f}%"
+        elif ils_pct >  1.0: pts, exp = -0.5, f"שקל נחלש {ils_pct:.1f}% — לחץ על שוק ישראל ⚠️"
+        elif ils_pct >  0.3: pts, exp = -0.2, f"שקל נחלש מעט {ils_pct:.1f}%"
+        else:                pts, exp =  0.0, f"שקל יציב ({ils_pct:+.2f}%)"
+        score += pts
+        breakdown.append({"factor": "💱 שקל/דולר (USD/ILS)", "points": pts, "explanation": exp})
+
+    # IL sector breadth
+    if il_sectors:
+        pos_sectors = sum(1 for s in il_sectors if s.get("pct_1w", 0) > 0)
+        breadth = pos_sectors / len(il_sectors) * 100
+        if   breadth >= 80: pts, exp = +0.8, f"רוחב שוק ישראלי חיובי — {breadth:.0f}% סקטורים עולים"
+        elif breadth >= 60: pts, exp = +0.3, f"רוחב שוק ישראלי טוב — {breadth:.0f}%"
+        elif breadth >= 40: pts, exp =  0.0, f"רוחב שוק ישראלי מעורב — {breadth:.0f}%"
+        else:               pts, exp = -0.5, f"רוחב שוק ישראלי חלש — {breadth:.0f}%"
+        score += pts
+        breakdown.append({"factor": "🌊 רוחב שוק ישראלי", "points": pts, "explanation": exp})
+
+    # Geopolitical risk from news
+    risk_keywords = [
+        "war", "attack", "terror", "missile", "rocket",
+        "military", "conflict", "ceasefire", "escalation",
+        "מלחמה", "מתקפה", "טרור", "טיל", "הסלמה", "מבצע",
+    ]
+    risk_count = sum(
+        1 for n in il_news
+        if any(kw in n.get("title", "").lower() for kw in risk_keywords)
+    )
+    if risk_count >= 3:
+        pts, exp = -1.5, f"סיכון גיאופוליטי גבוה — {risk_count} כותרות מדאיגות ⚠️"
+        score += pts
+        breakdown.append({"factor": "⚠️ סיכון גיאופוליטי", "points": pts, "explanation": exp})
+    elif risk_count >= 1:
+        pts, exp = -0.5, f"סיכון גיאופוליטי מתון — {risk_count} כותרות רלוונטיות"
+        score += pts
+        breakdown.append({"factor": "⚠️ סיכון גיאופוליטי", "points": pts, "explanation": exp})
+
+    # BOI rate
+    boi_rate = macro.get("boi_rate") if macro else None
+    if boi_rate is not None:
+        if   boi_rate <= 3.5: pts, exp = +0.3, f"ריבית בנק ישראל={boi_rate:.2f}% — סביבה נוחה לצמיחה ✅"
+        elif boi_rate >= 5.0: pts, exp = -0.3, f"ריבית בנק ישראל={boi_rate:.2f}% — ריבית גבוהה, לחץ על שוק"
+        else:                 pts, exp =  0.0, f"ריבית בנק ישראל={boi_rate:.2f}% — ניטרלי"
+        score += pts
+        breakdown.append({"factor": "🏦 ריבית בנק ישראל", "points": pts, "explanation": exp})
+
+    score = max(1.0, min(10.0, round(score, 1)))
+    return score, breakdown
+
+
 def _condition_label(score: float) -> tuple[str, str]:
     if score >= 8.0: return ("שוק שורי חזק מאוד 🚀", "#00ff88")
     if score >= 6.5: return ("שוק שורי 📈",           "#00d4a0")
@@ -542,6 +765,62 @@ def _market_summary(us_data: dict, il_data: dict, score: float,
     return "\n\n".join(parts)
 
 
+def _get_top_opportunities(us_sectors: list, us_score: float,
+                            il_sectors: list, il_score: float) -> list[dict]:
+    """
+    Identify top sector opportunities based on market + sector scores.
+    Returns list of {"sector", "market", "score", "reasoning"}
+    """
+    picks = []
+
+    # US opportunities
+    if us_score >= 5:  # Only show if US market is decent
+        for s in us_sectors[:3]:  # Top 3 US sectors
+            if s.get("score", 0) >= 7:
+                adj_score = round((us_score * 0.4) + (s["score"] * 0.6), 1)
+                picks.append({
+                    "sector": s.get("he", s.get("name", "")),
+                    "emoji": s.get("emoji", ""),
+                    "market": "🇺🇸 ארה\"ב",
+                    "sector_score": s["score"],
+                    "market_score": us_score,
+                    "combined_score": adj_score,
+                    "pct_1w": s.get("pct_1w", 0),
+                    "rs_1w": s.get("rs_1w", 0),
+                    "reasoning": (
+                        f"סקטור {s.get('he', s.get('name', ''))} מציג ביצועי יתר של "
+                        f"{s.get('rs_1w', 0):+.1f}% ביחס לשוק הכללי. "
+                        + (f"מגמה שבועית חיובית {s.get('pct_1w', 0):+.1f}%."
+                           if s.get("pct_1w", 0) > 0 else "")
+                    ),
+                    "caution": "⚠️ שוק חלש — בחר מניות סלקטיבית" if us_score < 5.5 else "",
+                })
+
+    # IL opportunities
+    if il_score >= 5:
+        for s in il_sectors[:2]:
+            if s.get("score", 0) >= 7:
+                adj_score = round((il_score * 0.4) + (s["score"] * 0.6), 1)
+                picks.append({
+                    "sector": s.get("name", ""),
+                    "emoji": s.get("emoji", ""),
+                    "market": "🇮🇱 ישראל",
+                    "sector_score": s["score"],
+                    "market_score": il_score,
+                    "combined_score": adj_score,
+                    "pct_1w": s.get("pct_1w", 0),
+                    "rs_1w": 0,
+                    "reasoning": (
+                        f"סקטור {s.get('name', '')} בביצועים חיוביים "
+                        f"{s.get('pct_1w', 0):+.1f}% השבוע."
+                    ),
+                    "caution": "⚠️ שוק ישראלי חלש — היזהר" if il_score < 5.5 else "",
+                })
+
+    picks.sort(key=lambda x: x["combined_score"], reverse=True)
+    return picks[:5]
+
+
 # ─── Main entry point ─────────────────────────────────────────────────────────
 
 def get_market_overview() -> dict:
@@ -552,7 +831,23 @@ def get_market_overview() -> dict:
     - Market news (positive/negative classified)
     - Score breakdown (why the score was given)
     - Macro context (gold, oil, bonds)
+    - Sector analysis (US + IL)
+    - Separate US and IL scores
+    - AI Top Opportunities
     """
+    # Import new modules here to keep get_market_overview() self-contained
+    # and to ensure graceful fallback if they fail
+    us_sectors, il_sectors = [], []
+    macro_ext = {}
+
+    try:
+        from data.sector_analysis import get_us_sector_analysis, get_il_sector_analysis
+        from data.macro_data import get_all_macro
+        macro_ext = get_all_macro()
+        # Fetch index data first so we can pass SP500 1w pct to sector analysis
+    except Exception as exc:
+        logger.warning("Sector/macro import failed: %s", exc)
+
     us_data, il_data, macro_data = {}, {}, {}
     us_analyses, il_analyses = {}, {}
 
@@ -579,6 +874,17 @@ def get_market_overview() -> dict:
             d["desc"] = meta["desc"]
             macro_data[name] = d
 
+    # Get S&P500 1w pct for sector relative strength
+    sp_1w = us_data.get("S&P 500", {}).get("pct_1w", 0) or 0
+
+    # Fetch sectors (graceful — if fails, empty lists)
+    try:
+        from data.sector_analysis import get_us_sector_analysis, get_il_sector_analysis
+        us_sectors = get_us_sector_analysis(market_pct_1w=sp_1w)
+        il_sectors = get_il_sector_analysis()
+    except Exception as exc:
+        logger.warning("Sector analysis failed: %s", exc)
+
     # Fear & Greed
     vix_val = us_data.get("VIX", {}).get("price", 20)
     sp_d    = us_data.get("S&P 500", {})
@@ -596,22 +902,66 @@ def get_market_overview() -> dict:
     )
     fear_greed["color"] = _fg_color(fear_greed["score"])
 
-    # Score with breakdown
-    score, breakdown = _calc_score_with_breakdown(us_data, il_data, fear_greed)
-    condition, color = _condition_label(score)
-    summary = _market_summary(us_data, il_data, score, fear_greed)
-
     # Market news
     us_news_raw = _fetch_market_news(US_NEWS_TICKERS, max_items=10)
     il_news_raw = _fetch_market_news(IL_NEWS_TICKERS, max_items=6)
     us_news = [{"title": n["title"], "publisher": n["publisher"],
                 "pub_ts": n["pub_ts"],
-                "sentiment": _classify_news(n["title"])} for n in us_news_raw]
+                "sentiment": _classify_news(n["title"]),
+                "impact": _news_impact(n["title"])} for n in us_news_raw]
     il_news = [{"title": n["title"], "publisher": n["publisher"],
                 "pub_ts": n["pub_ts"],
-                "sentiment": _classify_news(n["title"])} for n in il_news_raw]
+                "sentiment": _classify_news(n["title"]),
+                "impact": _news_impact(n["title"])} for n in il_news_raw]
+
+    # Scores
+    # Combined (legacy) score with breakdown
+    score, breakdown = _calc_score_with_breakdown(us_data, il_data, fear_greed)
+    condition, color = _condition_label(score)
+    summary = _market_summary(us_data, il_data, score, fear_greed)
+
+    # Separate US score
+    try:
+        us_score, us_breakdown = _calc_us_score(us_data, us_sectors, macro_ext, fear_greed)
+    except Exception:
+        us_score, us_breakdown = score, breakdown
+
+    # Separate IL score
+    try:
+        il_score, il_breakdown = _calc_il_score(il_data, il_sectors, macro_ext, fear_greed, il_news)
+    except Exception:
+        ta = il_data.get("TA-35", {})
+        ta_pct = ta.get("pct_1d", 0)
+        il_score = max(1.0, min(10.0, round(5.0 + ta_pct, 1)))
+        il_breakdown = []
+
+    us_condition, us_color = _condition_label(us_score)
+    il_condition, il_color = _condition_label(il_score)
+
+    # Market breadth
+    us_breadth = (
+        round(sum(1 for s in us_sectors if s.get("pct_1w", 0) > 0) / len(us_sectors) * 100, 1)
+        if us_sectors else None
+    )
+    il_breadth = (
+        round(sum(1 for s in il_sectors if s.get("pct_1w", 0) > 0) / len(il_sectors) * 100, 1)
+        if il_sectors else None
+    )
+
+    # Top/bottom sectors
+    top_sector_us    = us_sectors[0]  if us_sectors else None
+    bottom_sector_us = us_sectors[-1] if us_sectors else None
+    top_sector_il    = il_sectors[0]  if il_sectors else None
+    bottom_sector_il = il_sectors[-1] if il_sectors else None
+
+    # AI Top Opportunities
+    try:
+        top_opportunities = _get_top_opportunities(us_sectors, us_score, il_sectors, il_score)
+    except Exception:
+        top_opportunities = []
 
     return {
+        # Legacy keys (backward-compatible)
         "us":           us_data,
         "il":           il_data,
         "macro":        macro_data,
@@ -625,4 +975,23 @@ def get_market_overview() -> dict:
         "il_news":      il_news,
         "us_analyses":  us_analyses,
         "il_analyses":  il_analyses,
+        # New keys
+        "us_score":     us_score,
+        "il_score":     il_score,
+        "us_condition": us_condition,
+        "il_condition": il_condition,
+        "us_color":     us_color,
+        "il_color":     il_color,
+        "us_breakdown": us_breakdown,
+        "il_breakdown": il_breakdown,
+        "us_sectors":   us_sectors,
+        "il_sectors":   il_sectors,
+        "macro_ext":    macro_ext,
+        "us_breadth":   us_breadth,
+        "il_breadth":   il_breadth,
+        "top_sector_us":    top_sector_us,
+        "bottom_sector_us": bottom_sector_us,
+        "top_sector_il":    top_sector_il,
+        "bottom_sector_il": bottom_sector_il,
+        "top_opportunities": top_opportunities,
     }

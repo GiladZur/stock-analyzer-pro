@@ -16,7 +16,6 @@ def _secret(key: str, default: str = "") -> str:
         return os.getenv(key, default)
 
 ANTHROPIC_API_KEY = _secret("ANTHROPIC_API_KEY")
-OPENAI_API_KEY = _secret("OPENAI_API_KEY")
 GROQ_API_KEY = _secret("GROQ_API_KEY")
 NEWS_API_KEY = _secret("NEWS_API_KEY")  # Optional - from newsapi.org
 

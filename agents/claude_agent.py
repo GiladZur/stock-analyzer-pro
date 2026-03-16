@@ -3,7 +3,6 @@ AI Agents — multi-agent pipeline for stock analysis.
 
 Supports multiple AI providers:
   - Claude (Anthropic) — default
-  - GPT-4o-mini (OpenAI)
   - Llama 3 (Groq — free tier)
 
 Four specialized agents:
@@ -16,7 +15,7 @@ import json
 import logging
 import time
 import anthropic
-from config import ANTHROPIC_API_KEY, OPENAI_API_KEY, GROQ_API_KEY, CLAUDE_MODEL, AI_MODEL_PROVIDER
+from config import ANTHROPIC_API_KEY, GROQ_API_KEY, CLAUDE_MODEL, AI_MODEL_PROVIDER
 
 logger = logging.getLogger(__name__)
 
@@ -32,26 +31,22 @@ class BaseAgent:
         # Resolve API key
         if api_key:
             self.api_key = api_key
-        elif self.provider == "openai":
-            self.api_key = OPENAI_API_KEY
         elif self.provider == "groq":
             self.api_key = GROQ_API_KEY
         else:
             self.api_key = ANTHROPIC_API_KEY
 
         if not self.api_key:
-            provider_name = {"claude": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", "groq": "GROQ_API_KEY"}.get(self.provider, "API_KEY")
+            provider_name = {"claude": "ANTHROPIC_API_KEY", "groq": "GROQ_API_KEY"}.get(self.provider, "API_KEY")
             raise EnvironmentError(
-                f"{provider_name} is not set. Please add it to your .env file or enter it in the sidebar."
+                f"{provider_name} is not set. Please add it to your .env file or Streamlit Secrets."
             )
 
     def _call(self, system: str, user: str, max_tokens: int = 1200, retries: int = 4) -> str:
         """Call the configured AI provider with exponential-backoff retry."""
         for attempt in range(retries):
             try:
-                if self.provider == "openai":
-                    return self._call_openai(system, user, max_tokens)
-                elif self.provider == "groq":
+                if self.provider == "groq":
                     return self._call_groq(system, user, max_tokens)
                 else:
                     return self._call_claude(system, user, max_tokens)
@@ -84,20 +79,6 @@ class BaseAgent:
             raise Exception("rate limit")
         except anthropic.APIConnectionError as exc:
             return "⚠️ לא ניתן להתחבר ל-Claude API — בדוק API key וחיבור לאינטרנט."
-
-    def _call_openai(self, system: str, user: str, max_tokens: int) -> str:
-        """Call OpenAI API (GPT-4o-mini)."""
-        import openai
-        client = openai.OpenAI(api_key=self.api_key)
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            max_tokens=max_tokens,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        )
-        return response.choices[0].message.content
 
     def _call_groq(self, system: str, user: str, max_tokens: int) -> str:
         """Call Groq API (Llama 3)."""
