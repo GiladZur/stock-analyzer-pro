@@ -531,61 +531,150 @@ st.markdown("*ניתוח מניות מתקדם עם בינה מלאכותית �
 
 # ─── Market Overview ──────────────────────────────────────────────────────────
 
+def _mkt_price_str(name: str, price: float) -> str:
+    """Format price for display."""
+    if price > 10000:
+        return f"{price:,.0f}"
+    if price > 100:
+        return f"{price:,.2f}"
+    return f"{price:.2f}"
+
+def _mkt_card(name: str, data: dict) -> str:
+    """Render a single index card as HTML."""
+    price = data.get("price", 0)
+    pct   = data.get("pct_1d", 0)
+    rsi   = data.get("rsi")
+    m1    = data.get("pct_1m")
+    above200 = data.get("above_sma200")
+    desc  = data.get("desc", "")
+
+    pct_color = "#00d4a0" if pct >= 0 else "#ff4b4b"
+    arrow = "▲" if pct >= 0 else "▼"
+
+    # VIX special coloring
+    if name == "VIX":
+        vix_clr = "#00d4a0" if price < 20 else "#ff8844" if price < 30 else "#ff4b4b"
+        price_str = f'<span style="color:{vix_clr};font-size:1.25rem;font-weight:800">{price:.1f}</span>'
+    else:
+        price_str = f'<span style="color:#E6EDF3;font-size:1.2rem;font-weight:800">{_mkt_price_str(name, price)}</span>'
+
+    # Trend dot
+    if above200 is True:   trend_dot = '<span style="color:#00d4a0">●</span>'
+    elif above200 is False: trend_dot = '<span style="color:#ff4b4b">●</span>'
+    else:                   trend_dot = '<span style="color:#888">●</span>'
+
+    rsi_str = f'<span style="color:#8B949E;font-size:0.7rem">RSI {rsi:.0f}</span>' if rsi else ""
+    m1_str  = (f'<span style="color:{"#00d4a0" if m1>=0 else "#ff4b4b"};font-size:0.7rem">M: {m1:+.1f}%</span>'
+               if m1 is not None else "")
+
+    return (
+        f'<div class="metric-card" style="position:relative;min-height:100px">'
+        f'<h4 style="font-size:0.72rem">{trend_dot} {name}</h4>'
+        f'<p>{price_str}</p>'
+        f'<div style="color:{pct_color};font-size:0.85rem;font-weight:700">{arrow} {abs(pct):.2f}%</div>'
+        f'<div style="margin-top:4px;display:flex;gap:8px;justify-content:center">{rsi_str}{m1_str}</div>'
+        f'<div style="color:#555;font-size:0.62rem;margin-top:2px">{desc}</div>'
+        f'</div>'
+    )
+
 try:
     market_data = _fetch_market_overview()
     st.session_state["market_data"] = market_data
 
-    mkt_color = market_data.get("color", "#888888")
-    mkt_condition = market_data.get("condition", "")
-    mkt_score = market_data.get("score", 5.0)
+    mkt_color    = market_data.get("color", "#888888")
+    mkt_condition= market_data.get("condition", "")
+    mkt_score    = market_data.get("score", 5.0)
+    mkt_summary  = market_data.get("summary", "")
+    us_data      = market_data.get("us", {})
+    il_data      = market_data.get("il", {})
+    macro_data   = market_data.get("macro", {})
+    us_analyses  = market_data.get("us_analyses", {})
+    il_analyses  = market_data.get("il_analyses", {})
 
+    # ── Header bar ──────────────────────────────────────────────────────────
+    score_bar_w = int(mkt_score / 10 * 100)
     st.markdown(
-        f'<div style="background:#161B22;border:1px solid #30363d;border-radius:10px;'
-        f'padding:14px 20px;margin-bottom:12px;">'
-        f'<span style="color:{mkt_color};font-size:1.1rem;font-weight:700">'
-        f'🌐 מצב השוק: {mkt_condition}</span>'
-        f'<span style="color:#8B949E;font-size:0.85rem;margin-right:16px"> | '
-        f'ציון בריאות שוק: <b style="color:{mkt_color}">{mkt_score}/10</b></span>'
+        f'<div style="background:#161B22;border:1px solid {mkt_color}44;border-radius:12px;'
+        f'padding:16px 22px;margin-bottom:10px;">'
+        f'<div style="display:flex;justify-content:space-between;align-items:center">'
+        f'<span style="color:{mkt_color};font-size:1.15rem;font-weight:800">🌐 מצב שוק: {mkt_condition}</span>'
+        f'<span style="color:#8B949E;font-size:0.9rem">ציון בריאות: '
+        f'<b style="color:{mkt_color};font-size:1.1rem">{mkt_score}/10</b></span>'
+        f'</div>'
+        f'<div style="background:#0E1117;border-radius:6px;height:6px;margin-top:8px">'
+        f'<div style="background:{mkt_color};width:{score_bar_w}%;height:100%;border-radius:6px"></div>'
+        f'</div>'
         f'</div>',
         unsafe_allow_html=True,
     )
 
-    indices = market_data.get("indices", {})
-    if indices:
-        mkt_cols = st.columns(len(indices))
-        for col_idx, (name, data) in enumerate(indices.items()):
-            price = data.get("price", 0)
-            pct = data.get("change_pct", 0)
-            pct_color = "#00d4a0" if pct >= 0 else "#ff4b4b"
-            arrow = "▲" if pct >= 0 else "▼"
+    # ── Market overview expander ─────────────────────────────────────────────
+    with st.expander("📊 פירוט מצב השוק — ניתוח טכני ופונדמנטלי מקרו", expanded=True):
 
-            # VIX danger indicator
-            extra = ""
-            if "VIX" in name:
-                if price > 30:
-                    extra = " ⚠️"
-                elif price < 15:
-                    extra = " ✅"
-                price_str = f"{price:.1f}{extra}"
-            elif price > 10000:
-                price_str = f"{price:,.0f}"
-            elif price > 100:
-                price_str = f"{price:,.2f}"
-            else:
-                price_str = f"{price:.2f}"
+        # Summary text
+        st.markdown(mkt_summary)
+        st.divider()
 
-            with mkt_cols[col_idx]:
-                st.markdown(
-                    f'<div class="metric-card">'
-                    f'<h4>{name}</h4>'
-                    f'<p>{price_str}</p>'
-                    f'<span style="color:{pct_color};font-size:0.85rem;font-weight:700">'
-                    f'{arrow} {abs(pct):.2f}%</span>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
+        # ── US Markets ───────────────────────────────────────────────────────
+        st.markdown("### 🇺🇸 שוק ארה\"ב")
+        if us_data:
+            us_cols = st.columns(len(us_data))
+            for ci, (name, data) in enumerate(us_data.items()):
+                us_cols[ci].markdown(_mkt_card(name, data), unsafe_allow_html=True)
+
+            # Per-index analysis
+            st.markdown("#### ניתוח טכני — מדדי ארה\"ב")
+            for name, analysis in us_analyses.items():
+                with st.expander(f"📈 {name} — ניתוח מפורט", expanded=False):
+                    d = us_data.get(name, {})
+                    a1, a2, a3, a4 = st.columns(4)
+                    if d.get("pct_1w") is not None:
+                        a1.metric("שבוע", f"{d['pct_1w']:+.2f}%")
+                    if d.get("pct_1m") is not None:
+                        a2.metric("חודש", f"{d['pct_1m']:+.2f}%")
+                    if d.get("pct_3m") is not None:
+                        a3.metric("3 חודשים", f"{d['pct_3m']:+.2f}%")
+                    a4.metric("מהשיא", f"{d.get('pct_from_hi', 0):.1f}%")
+                    st.markdown(analysis)
+
+        st.divider()
+
+        # ── Israeli Market ───────────────────────────────────────────────────
+        st.markdown("### 🇮🇱 שוק ישראל (ת\"א)")
+        if il_data:
+            il_cols = st.columns(len(il_data))
+            for ci, (name, data) in enumerate(il_data.items()):
+                il_cols[ci].markdown(_mkt_card(name, data), unsafe_allow_html=True)
+
+            # Per-index analysis
+            st.markdown("#### ניתוח טכני — מדדי ת\"א")
+            for name, analysis in il_analyses.items():
+                with st.expander(f"🇮🇱 {name} — ניתוח מפורט", expanded=False):
+                    d = il_data.get(name, {})
+                    b1, b2, b3, b4 = st.columns(4)
+                    if d.get("pct_1w") is not None:
+                        b1.metric("שבוע", f"{d['pct_1w']:+.2f}%")
+                    if d.get("pct_1m") is not None:
+                        b2.metric("חודש", f"{d['pct_1m']:+.2f}%")
+                    if d.get("pct_3m") is not None:
+                        b3.metric("3 חודשים", f"{d['pct_3m']:+.2f}%")
+                    b4.metric("מהשיא", f"{d.get('pct_from_hi', 0):.1f}%")
+                    st.markdown(analysis)
+
+        st.divider()
+
+        # ── Macro context ────────────────────────────────────────────────────
+        if macro_data:
+            st.markdown("### 🌍 הקשר מאקרו")
+            mc_cols = st.columns(len(macro_data))
+            for ci, (name, data) in enumerate(macro_data.items()):
+                mc_cols[ci].markdown(_mkt_card(name, data), unsafe_allow_html=True)
+            st.caption("💡 זהב עולה = חיפוש מקלט בטוח | תשואות אגח עולות = לחץ על מניות צמיחה | נפט = אינפלציה")
+
     st.divider()
-except Exception:
+
+except Exception as _mkt_err:
+    logger.warning("Market overview failed: %s", _mkt_err)
     pass  # Market overview is non-critical — never break the main app
 
 # ─── Analysis trigger ─────────────────────────────────────────────────────────
