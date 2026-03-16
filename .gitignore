@@ -13,8 +13,8 @@ __pycache__/
 *.pyd
 .Python
 
-# Streamlit cache
-.streamlit/
+# Streamlit secrets (local only — never commit!)
+.streamlit/secrets.toml
 
 # IDE
 .vscode/

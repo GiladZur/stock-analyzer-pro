@@ -6,12 +6,20 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ─── API Keys ──────────────────────────────────────────────────────────────────
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")  # Optional - from newsapi.org
+# ─── API Keys — support both .env (local) and st.secrets (Streamlit Cloud) ────
+def _secret(key: str, default: str = "") -> str:
+    """Read from st.secrets first (Streamlit Cloud), then from env vars."""
+    try:
+        import streamlit as st
+        return st.secrets.get(key, os.getenv(key, default))
+    except Exception:
+        return os.getenv(key, default)
+
+ANTHROPIC_API_KEY = _secret("ANTHROPIC_API_KEY")
+NEWS_API_KEY = _secret("NEWS_API_KEY")  # Optional - from newsapi.org
 
 # ─── Claude Model ─────────────────────────────────────────────────────────────
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-opus-4-6")
+CLAUDE_MODEL = _secret("CLAUDE_MODEL") or "claude-opus-4-6"
 
 # ─── Data Settings ────────────────────────────────────────────────────────────
 DEFAULT_PERIOD = "6mo"          # 6 months of historical data
