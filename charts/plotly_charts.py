@@ -562,7 +562,7 @@ def make_full_technical_chart(df: pd.DataFrame, symbol: str, levels: dict | None
 
     # ── Layout ────────────────────────────────────────────────────────────────
     fig.update_layout(
-        height=1350,
+        height=1050,
         template=CHART_THEME,
         paper_bgcolor="rgba(14,17,23,1)",
         plot_bgcolor="rgba(14,17,23,1)",

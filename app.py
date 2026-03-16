@@ -382,6 +382,31 @@ def _build_html_report(
 init_session()
 
 
+# ─── Cached data-fetch helpers ────────────────────────────────────────────────
+# Using @st.cache_data so repeated runs / phone reconnects reuse results
+# instead of re-fetching everything from scratch.
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_history(symbol: str, period: str):
+    return StockFetcher().fetch_history(symbol, period=period)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_info(symbol: str):
+    return StockFetcher().fetch_info(symbol)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_financials(symbol: str):
+    return StockFetcher().fetch_financials(symbol)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_news(symbol: str):
+    return StockFetcher().fetch_news(symbol)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_change(symbol: str):
+    return StockFetcher().get_price_change(symbol)
+
+
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 
 with st.sidebar:
@@ -472,14 +497,14 @@ if analyze_btn and symbol_input:
     progress_bar = st.progress(0)
 
     try:
-        # ── Fetch price data ──────────────────────────────────────────────────
+        # ── Fetch price data (cached) ─────────────────────────────────────────
         status_placeholder.info(f"⏳ מוריד נתוני מחיר עבור **{final_symbol}**...")
         progress_bar.progress(10)
 
-        df = fetcher.fetch_history(final_symbol, period=period)
-        info = fetcher.fetch_info(final_symbol)
-        financials = fetcher.fetch_financials(final_symbol)
-        change = fetcher.get_price_change(final_symbol)
+        df = _fetch_history(final_symbol, period)
+        info = _fetch_info(final_symbol)
+        financials = _fetch_financials(final_symbol)
+        change = _fetch_change(final_symbol)
 
         # ── Technical analysis ────────────────────────────────────────────────
         status_placeholder.info("📊 מחשב אינדיקטורים טכניים...")
@@ -495,7 +520,7 @@ if analyze_btn and symbol_input:
         status_placeholder.info("📰 מאחזר חדשות אחרונות...")
         progress_bar.progress(55)
         company_name = info.get("longName") or info.get("shortName") or final_symbol
-        news_items = fetcher.fetch_news(final_symbol)
+        news_items = _fetch_news(final_symbol)
 
         # ── AI agents ─────────────────────────────────────────────────────────
         ai_results = {}
