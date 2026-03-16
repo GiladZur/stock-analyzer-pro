@@ -1221,6 +1221,43 @@ if st.session_state.get("analysis_done") and not st.session_state.get("error"):
         <p>1 : {levels['risk_reward_ratio']:.0f}</p>
         </div>""", unsafe_allow_html=True)
 
+    # ── Generate chart ONCE (used in both tab display and PDF) ───────────────
+    fig_full = make_full_technical_chart(tech.df, sym, levels)
+
+    # ── PDF generation & download button — prominently at top ────────────────
+    st.markdown("")
+    _pdf_col, _spacer = st.columns([1, 3])
+    with _pdf_col:
+        try:
+            _pdf_bytes = build_pdf_report(
+                sym, company_name, current_price, currency_sym,
+                tech, fund, levels, info, ai_results, change, news_items,
+                df=df,
+                chart_fig=fig_full,
+            )
+            st.download_button(
+                label="📥 הורד דוח PDF מלא",
+                data=_pdf_bytes,
+                file_name=f"{sym}_analysis_{datetime.now().strftime('%Y%m%d')}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+                type="primary",
+            )
+        except Exception as _pdf_exc:
+            # Fallback to HTML if fpdf2 fails
+            _html = _build_html_report(
+                sym, company_name, current_price, currency_sym,
+                tech, fund, levels, info, ai_results, change,
+            )
+            st.download_button(
+                label="📥 הורד דוח מלא (HTML→PDF)",
+                data=_html,
+                file_name=f"{sym}_analysis_{datetime.now().strftime('%Y%m%d')}.html",
+                mime="text/html",
+                use_container_width=True,
+            )
+            st.caption(f"⚠️ PDF נכשל ({_pdf_exc}) — שמור כ-HTML ופתח בדפדפן להדפסה כ-PDF")
+
     st.divider()
 
     # ── Tabs ──────────────────────────────────────────────────────────────────
@@ -1237,8 +1274,7 @@ if st.session_state.get("analysis_done") and not st.session_state.get("error"):
     with tab_tech:
         st.markdown("## 📊 ניתוח טכני מלא")
 
-        # Full 7-panel chart — use tech.df (includes all computed indicator columns)
-        fig_full = make_full_technical_chart(tech.df, sym, levels)
+        # Reuse the already-generated chart
         st.plotly_chart(fig_full, use_container_width=True)
 
         st.divider()
@@ -1558,33 +1594,7 @@ if st.session_state.get("analysis_done") and not st.session_state.get("error"):
     # ════════════════════════════════════════════════════════════════════════
     with tab_summary:
         st.markdown("## 🎯 סיכום ניתוח — המלצה סופית")
-
-        # ── PDF report download ────────────────────────────────────────────
-        try:
-            pdf_bytes = build_pdf_report(
-                sym, company_name, current_price, currency_sym,
-                tech, fund, levels, info, ai_results, change, news_items,
-            )
-            st.download_button(
-                label="📄 הורד דוח PDF",
-                data=pdf_bytes,
-                file_name=f"{sym}_report_{datetime.now().strftime('%Y%m%d')}.pdf",
-                mime="application/pdf",
-            )
-        except Exception as _pdf_exc:
-            # Fallback to HTML report if fpdf2 fails
-            html_report = _build_html_report(
-                sym, company_name, current_price, currency_sym,
-                tech, fund, levels, info, ai_results, change,
-            )
-            st.download_button(
-                label="📄 הורד דוח מלא → PDF",
-                data=html_report,
-                file_name=f"{sym}_report_{datetime.now().strftime('%Y%m%d')}.html",
-                mime="text/html",
-                help="הקובץ נפתח בדפדפן ומציג את דיאלוג ההדפסה אוטומטית — בחר 'שמור כ-PDF'",
-            )
-            st.caption(f"💡 לאחר הורדה: פתח את הקובץ בדפדפן → יפתח חלון הדפסה אוטומטית → בחר **שמור כ-PDF**  \n(שגיאת PDF: {_pdf_exc})")
+        st.info("📥 כפתור הורדת PDF מלא נמצא מעל הטאבים — גלול למעלה", icon="☝️")
         st.divider()
 
         # Score overview — both tech.score and fund.score are now 1-10
