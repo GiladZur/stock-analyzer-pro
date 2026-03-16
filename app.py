@@ -212,111 +212,171 @@ def _build_html_report(
     sym, company_name, current_price, currency_sym,
     tech, fund, levels, info, ai_results, change,
 ) -> str:
-    """Build a printable HTML report for the stock analysis."""
+    """Build a print-ready HTML report (open in browser → Ctrl+P → Save as PDF)."""
     now = datetime.now().strftime("%d/%m/%Y %H:%M")
-    sig_color = {"BUY": "#00a060", "STRONG BUY": "#007040",
-                 "SELL": "#cc3333", "STRONG SELL": "#990020"}.get(tech.summary, "#666")
-    fund_color = {"BUY": "#00a060", "STRONG BUY": "#007040",
-                  "SELL": "#cc3333", "STRONG SELL": "#990020"}.get(fund.rating, "#666")
 
-    signals_rows = ""
-    for _, row in tech.signals_table().iterrows():
-        sig = row["Signal"]
-        c = "#00a060" if "BUY" in sig else "#cc3333" if "SELL" in sig else "#666"
-        signals_rows += (
-            f"<tr><td>{row['Indicator']}</td>"
-            f"<td style='color:{c};font-weight:700'>{sig}</td>"
-            f"<td>{row['Value']}</td>"
-            f"<td style='font-size:0.85em'>{row['Reason']}</td></tr>"
+    def _color(signal):
+        s = str(signal).upper()
+        if "STRONG BUY" in s:  return "#007040"
+        if "BUY" in s:         return "#00a060"
+        if "STRONG SELL" in s: return "#990020"
+        if "SELL" in s:        return "#cc3333"
+        return "#555555"
+
+    def _card(title, value, color="#111"):
+        return (
+            "<td style='border:1px solid #ccc;border-radius:6px;padding:10px 14px;"
+            "text-align:center;background:#f9fbff;min-width:110px'>"
+            f"<div style='font-size:0.72em;color:#888;text-transform:uppercase;margin-bottom:4px'>{title}</div>"
+            f"<div style='font-size:1.05em;font-weight:700;color:{color}'>{value}</div>"
+            "</td>"
         )
 
-    metrics_rows = ""
-    for k, v in fund.metrics.items():
-        if v != "N/A":
-            metrics_rows += f"<tr><td>{k}</td><td>{v}</td></tr>"
+    # ── Cards row 1: price / change / signals ─────────────────────────────────
+    chg_color = "#00a060" if change['pct'] >= 0 else "#cc3333"
+    cards1 = (
+        "<table style='border-collapse:separate;border-spacing:8px;margin:10px 0'><tr>"
+        + _card("מחיר נוכחי", fmt_price(current_price, currency_sym))
+        + _card("שינוי יומי", f"{change['pct']:+.2f}%", chg_color)
+        + _card("סיגנל טכני", tech.summary, _color(tech.summary))
+        + _card("דירוג פונדמנטלי", fund.rating, _color(fund.rating))
+        + _card("ציון טכני", f"{tech.score}/10")
+        + _card("ציון פונדמנטלי", f"{fund.score}/10")
+        + "</tr></table>"
+    )
 
-    ai_tech = ai_results.get("technical", "")
-    ai_fund = ai_results.get("fundamental", "")
+    # ── Cards row 2: levels ───────────────────────────────────────────────────
+    t1_pct = (levels['target_1'] / current_price - 1) * 100
+    t2_pct = (levels['target_2'] / current_price - 1) * 100
+    sl_pct = (levels['stop_loss'] / current_price - 1) * 100
+    cards2 = (
+        "<table style='border-collapse:separate;border-spacing:8px;margin:10px 0'><tr>"
+        + _card("כניסה", fmt_price(levels['entry_price'], currency_sym), "#005a9e")
+        + _card("יעד 1", f"{fmt_price(levels['target_1'], currency_sym)}<br><small>+{t1_pct:.1f}%</small>", "#00a060")
+        + _card("יעד 2", f"{fmt_price(levels['target_2'], currency_sym)}<br><small>+{t2_pct:.1f}%</small>", "#00a060")
+        + _card("Stop Loss", f"{fmt_price(levels['stop_loss'], currency_sym)}<br><small>{sl_pct:.1f}%</small>", "#cc3333")
+        + _card("ATR", fmt_price(levels['atr'], currency_sym))
+        + _card("Risk:Reward", f"1:{levels['risk_reward_ratio']:.0f}")
+        + "</tr></table>"
+    )
+
+    # ── Signals table ─────────────────────────────────────────────────────────
+    sig_rows = []
+    for _, row in tech.signals_table().iterrows():
+        sig = row["Signal"]
+        c = _color(sig)
+        sig_rows.append(
+            f"<tr>"
+            f"<td style='padding:5px 10px;border-bottom:1px solid #eee'>{row['Indicator']}</td>"
+            f"<td style='padding:5px 10px;border-bottom:1px solid #eee;color:{c};font-weight:700'>{sig}</td>"
+            f"<td style='padding:5px 10px;border-bottom:1px solid #eee'>{row['Value']}</td>"
+            f"<td style='padding:5px 10px;border-bottom:1px solid #eee;font-size:0.85em;color:#555'>{row['Reason']}</td>"
+            f"</tr>"
+        )
+    signals_table = (
+        "<table style='width:100%;border-collapse:collapse;font-size:0.88em'>"
+        "<tr style='background:#005a9e;color:#fff'>"
+        "<th style='padding:7px 10px;text-align:right'>אינדיקטור</th>"
+        "<th style='padding:7px 10px;text-align:right'>סיגנל</th>"
+        "<th style='padding:7px 10px;text-align:right'>ערך</th>"
+        "<th style='padding:7px 10px;text-align:right'>סיבה</th>"
+        "</tr>"
+        + "".join(sig_rows)
+        + "</table>"
+    )
+
+    # ── Metrics table ─────────────────────────────────────────────────────────
+    met_rows = []
+    items = [(k, v) for k, v in fund.metrics.items() if v != "N/A"]
+    for i, (k, v) in enumerate(items):
+        bg = "background:#f5f8fc" if i % 2 == 0 else ""
+        met_rows.append(
+            f"<tr style='{bg}'>"
+            f"<td style='padding:5px 10px;border-bottom:1px solid #eee;color:#444;width:50%'>{k}</td>"
+            f"<td style='padding:5px 10px;border-bottom:1px solid #eee;font-weight:600'>{v}</td>"
+            f"</tr>"
+        )
+    # split into 2 columns side by side
+    half = len(met_rows) // 2 + len(met_rows) % 2
+    left_rows = "".join(met_rows[:half])
+    right_rows = "".join(met_rows[half:])
+    metrics_table = (
+        "<table style='width:100%;border-spacing:16px 0;border-collapse:separate'><tr>"
+        "<td style='vertical-align:top;width:50%'>"
+        "<table style='width:100%;border-collapse:collapse;font-size:0.88em'>" + left_rows + "</table>"
+        "</td>"
+        "<td style='vertical-align:top;width:50%'>"
+        "<table style='width:100%;border-collapse:collapse;font-size:0.88em'>" + right_rows + "</table>"
+        "</td>"
+        "</tr></table>"
+    )
+
+    # ── AI sections ───────────────────────────────────────────────────────────
+    ai_tech    = ai_results.get("technical", "")
+    ai_fund    = ai_results.get("fundamental", "")
     ai_summary = ai_results.get("summary", "")
 
-    return f"""<!DOCTYPE html>
-<html dir="rtl" lang="he">
-<head>
-<meta charset="utf-8">
-<title>דוח ניתוח מניה — {sym}</title>
-<style>
-  body {{ font-family: Arial, sans-serif; background:#fff; color:#111; direction:rtl; margin:24px; }}
-  h1 {{ color:#005a9e; border-bottom:2px solid #005a9e; padding-bottom:6px; }}
-  h2 {{ color:#2c5f8a; margin-top:28px; border-bottom:1px solid #ccc; padding-bottom:4px; }}
-  table {{ width:100%; border-collapse:collapse; margin:10px 0; font-size:0.88em; }}
-  th {{ background:#005a9e; color:#fff; padding:6px 10px; text-align:right; }}
-  td {{ padding:5px 10px; border-bottom:1px solid #e0e0e0; }}
-  tr:nth-child(even) td {{ background:#f5f8fc; }}
-  .meta {{ color:#555; font-size:0.85em; margin-bottom:16px; }}
-  .ai-box {{ background:#f0f6ff; border-right:4px solid #005a9e; padding:14px; margin:10px 0;
-             border-radius:4px; white-space:pre-wrap; line-height:1.7; direction:rtl; }}
-  .grid {{ display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:12px 0; }}
-  .card {{ border:1px solid #ccc; border-radius:6px; padding:10px; text-align:center; }}
-  .card h4 {{ margin:0 0 4px; color:#666; font-size:0.72em; text-transform:uppercase; }}
-  .card p {{ margin:0; font-size:1.1em; font-weight:700; }}
-  @media print {{ body {{ margin:8px; }} }}
-</style>
-</head>
-<body>
-<h1>📈 דוח ניתוח מניה — {sym}</h1>
-<div class="meta">
-  <strong>{company_name}</strong> | {info.get('exchange','N/A')} | {info.get('sector','N/A')} | נוצר: {now}
-</div>
+    def _ai_section(title, text):
+        if not text:
+            return ""
+        safe = text.replace("<", "&lt;").replace(">", "&gt;")
+        return (
+            f"<h2>{title}</h2>"
+            "<div style='background:#f0f6ff;border-right:4px solid #005a9e;padding:14px;"
+            "border-radius:4px;white-space:pre-wrap;line-height:1.8;font-size:0.9em;"
+            "direction:rtl;color:#222'>" + safe + "</div>"
+        )
 
-<h2>💰 נתוני מחיר</h2>
-<div class="grid">
-  <div class="card"><h4>מחיר נוכחי</h4><p>{fmt_price(current_price, currency_sym)}</p></div>
-  <div class="card"><h4>שינוי יומי</h4>
-    <p style="color:{'#00a060' if change['pct']>=0 else '#cc3333'}">{change['pct']:+.2f}%</p></div>
-  <div class="card"><h4>סיגנל טכני</h4><p style="color:{sig_color}">{tech.summary}</p></div>
-  <div class="card"><h4>דירוג פונדמנטלי</h4><p style="color:{fund_color}">{fund.rating}</p></div>
-</div>
-
-<h2>🎯 רמות מסחר</h2>
-<div class="grid">
-  <div class="card"><h4>כניסה</h4><p style="color:#005a9e">{fmt_price(levels['entry_price'], currency_sym)}</p></div>
-  <div class="card"><h4>יעד 1</h4>
-    <p style="color:#00a060">{fmt_price(levels['target_1'], currency_sym)}<br>
-    <small>+{(levels['target_1']/current_price-1)*100:.1f}%</small></p></div>
-  <div class="card"><h4>יעד 2</h4>
-    <p style="color:#00a060">{fmt_price(levels['target_2'], currency_sym)}<br>
-    <small>+{(levels['target_2']/current_price-1)*100:.1f}%</small></p></div>
-  <div class="card"><h4>Stop Loss</h4>
-    <p style="color:#cc3333">{fmt_price(levels['stop_loss'], currency_sym)}<br>
-    <small>{(levels['stop_loss']/current_price-1)*100:.1f}%</small></p></div>
-</div>
-<p>ATR: {fmt_price(levels['atr'], currency_sym)} &nbsp;|&nbsp;
-   Risk:Reward = 1:{levels['risk_reward_ratio']:.0f} &nbsp;|&nbsp;
-   סיגנלי קנייה: {levels['buy_signals']}/{levels['total_signals']} &nbsp;|&nbsp;
-   ציון טכני: {tech.score}/10 &nbsp;|&nbsp; ציון פונדמנטלי: {fund.score}/10</p>
-
-<h2>📊 אינדיקטורים טכניים</h2>
-<table>
-<tr><th>אינדיקטור</th><th>סיגנל</th><th>ערך</th><th>סיבה</th></tr>
-{signals_rows}
-</table>
-
-<h2>📑 מדדים פונדמנטליים</h2>
-<table>
-<tr><th>מדד</th><th>ערך</th></tr>
-{metrics_rows}
-</table>
-
-{"<h2>🤖 ניתוח טכני — Claude AI</h2><div class='ai-box'>" + ai_tech + "</div>" if ai_tech else ""}
-{"<h2>🤖 ניתוח פונדמנטלי — Claude AI</h2><div class='ai-box'>" + ai_fund + "</div>" if ai_fund else ""}
-{"<h2>🤖 סיכום והמלצה — Claude AI</h2><div class='ai-box'>" + ai_summary + "</div>" if ai_summary else ""}
-
-<p style="color:#999;font-size:0.75em;margin-top:30px;border-top:1px solid #ddd;padding-top:8px;">
-⚠️ כתב ויתור: המידע באפליקציה זו הוא לצרכי מחקר ומידע בלבד ואינו מהווה ייעוץ השקעות.
-נוצר על ידי Stock Analyzer Pro | מופעל על ידי Claude AI (Anthropic)
-</p>
-</body>
-</html>"""
+    # ── Assemble ──────────────────────────────────────────────────────────────
+    html_parts = [
+        "<!DOCTYPE html>",
+        '<html dir="rtl" lang="he">',
+        "<head>",
+        '<meta charset="utf-8">',
+        f"<title>דוח ניתוח מניה — {sym}</title>",
+        "<style>",
+        "  body { font-family: Arial, Helvetica, sans-serif; background:#fff; color:#111;",
+        "         direction:rtl; margin:24px; font-size:14px; }",
+        "  h1 { color:#005a9e; border-bottom:3px solid #005a9e; padding-bottom:8px; margin-bottom:4px; }",
+        "  h2 { color:#1a4a80; margin-top:26px; border-bottom:1px solid #c8d8e8;",
+        "       padding-bottom:4px; font-size:1.05em; }",
+        "  @media print {",
+        "    body { margin:6mm; font-size:11px; }",
+        "    h2 { page-break-after: avoid; }",
+        "    table { page-break-inside: avoid; }",
+        "    .no-print { display:none; }",
+        "  }",
+        "</style>",
+        "<script>window.addEventListener('load', function(){ window.print(); });</script>",
+        "</head>",
+        "<body>",
+        f"<h1>&#x1F4C8; דוח ניתוח מניה &#x2014; {sym}</h1>",
+        f"<p style='color:#555;font-size:0.85em;margin:0 0 16px'>"
+        f"<strong>{company_name}</strong> &nbsp;|&nbsp; "
+        f"{info.get('exchange','N/A')} &nbsp;|&nbsp; {info.get('sector','N/A')} &nbsp;|&nbsp; "
+        f"נוצר: {now}</p>",
+        "<h2>&#x1F4B0; נתוני מחיר וציונים</h2>",
+        cards1,
+        "<h2>&#x1F3AF; רמות מסחר</h2>",
+        cards2,
+        f"<p style='font-size:0.85em;color:#555'>"
+        f"סיגנלי קנייה: <strong>{levels['buy_signals']}/{levels['total_signals']}</strong> &nbsp;|&nbsp; "
+        f"סיגנלי מכירה: <strong>{levels['sell_signals']}/{levels['total_signals']}</strong></p>",
+        "<h2>&#x1F4CA; אינדיקטורים טכניים</h2>",
+        signals_table,
+        "<h2>&#x1F4CB; מדדים פונדמנטליים</h2>",
+        metrics_table,
+        _ai_section("&#x1F916; ניתוח טכני — Claude AI", ai_tech),
+        _ai_section("&#x1F916; ניתוח פונדמנטלי — Claude AI", ai_fund),
+        _ai_section("&#x1F916; סיכום והמלצה — Claude AI", ai_summary),
+        "<p style='color:#aaa;font-size:0.75em;margin-top:30px;border-top:1px solid #ddd;padding-top:8px'>",
+        "&#x26A0;&#xFE0F; כתב ויתור: המידע הוא לצרכי מחקר בלבד ואינו מהווה ייעוץ השקעות.",
+        " נוצר על ידי Stock Analyzer Pro | מופעל על ידי Claude AI (Anthropic)",
+        "</p>",
+        "</body>",
+        "</html>",
+    ]
+    return "\n".join(html_parts)
 
 
 init_session()
@@ -611,8 +671,8 @@ if st.session_state.get("analysis_done") and not st.session_state.get("error"):
     with tab_tech:
         st.markdown("## 📊 ניתוח טכני מלא")
 
-        # Full 7-panel chart
-        fig_full = make_full_technical_chart(df, sym, levels)
+        # Full 7-panel chart — use tech.df (includes all computed indicator columns)
+        fig_full = make_full_technical_chart(tech.df, sym, levels)
         st.plotly_chart(fig_full, use_container_width=True)
 
         st.divider()
@@ -939,12 +999,13 @@ if st.session_state.get("analysis_done") and not st.session_state.get("error"):
             tech, fund, levels, info, ai_results, change,
         )
         st.download_button(
-            label="📄 הורד דוח מלא (PDF)",
+            label="📄 הורד דוח מלא → PDF",
             data=html_report,
             file_name=f"{sym}_report_{datetime.now().strftime('%Y%m%d')}.html",
             mime="text/html",
-            help="פתח את הקובץ בדפדפן ולחץ Ctrl+P → שמור כ-PDF",
+            help="הקובץ נפתח בדפדפן ומציג את דיאלוג ההדפסה אוטומטית — בחר 'שמור כ-PDF'",
         )
+        st.caption("💡 לאחר הורדה: פתח את הקובץ בדפדפן → יפתח חלון הדפסה אוטומטית → בחר **שמור כ-PDF**")
         st.divider()
 
         # Score overview
