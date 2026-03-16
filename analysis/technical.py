@@ -3,7 +3,7 @@ Technical Analysis Engine — calculates all indicators and generates buy/sell s
 """
 import pandas as pd
 import numpy as np
-import pandas_ta as ta
+import ta
 import logging
 from config import (
     RSI_PERIOD, MACD_FAST, MACD_SLOW, MACD_SIGNAL,
@@ -68,65 +68,87 @@ class TechnicalAnalyzer:
 
     def _moving_averages(self):
         for p in SMA_PERIODS:
-            self.df[f"SMA_{p}"] = ta.sma(self.df["Close"], length=p)
+            self.df[f"SMA_{p}"] = ta.trend.SMAIndicator(close=self.df["Close"], window=p).sma_indicator()
         for p in EMA_PERIODS:
-            self.df[f"EMA_{p}"] = ta.ema(self.df["Close"], length=p)
+            self.df[f"EMA_{p}"] = ta.trend.EMAIndicator(close=self.df["Close"], window=p).ema_indicator()
         # 200 EMA
-        self.df["EMA_200"] = ta.ema(self.df["Close"], length=200)
+        self.df["EMA_200"] = ta.trend.EMAIndicator(close=self.df["Close"], window=200).ema_indicator()
 
     def _macd(self):
-        macd = ta.macd(self.df["Close"], fast=MACD_FAST, slow=MACD_SLOW, signal=MACD_SIGNAL)
-        if macd is not None and not macd.empty:
-            cols = macd.columns.tolist()
-            self.df["MACD"] = macd[cols[0]]
-            self.df["MACD_Signal"] = macd[cols[1]] if len(cols) > 1 else np.nan
-            self.df["MACD_Hist"] = macd[cols[2]] if len(cols) > 2 else np.nan
+        macd_obj = ta.trend.MACD(
+            close=self.df["Close"],
+            window_slow=MACD_SLOW,
+            window_fast=MACD_FAST,
+            window_sign=MACD_SIGNAL,
+        )
+        self.df["MACD"] = macd_obj.macd()
+        self.df["MACD_Signal"] = macd_obj.macd_signal()
+        self.df["MACD_Hist"] = macd_obj.macd_diff()
 
     def _rsi(self):
-        self.df["RSI"] = ta.rsi(self.df["Close"], length=RSI_PERIOD)
+        self.df["RSI"] = ta.momentum.RSIIndicator(close=self.df["Close"], window=RSI_PERIOD).rsi()
 
     def _bollinger_bands(self):
-        bb = ta.bbands(self.df["Close"], length=BB_PERIOD, std=BB_STD)
-        if bb is not None and not bb.empty:
-            cols = bb.columns.tolist()
-            self.df["BB_Lower"] = bb[cols[0]]
-            self.df["BB_Middle"] = bb[cols[1]]
-            self.df["BB_Upper"] = bb[cols[2]]
-            self.df["BB_Width"] = (self.df["BB_Upper"] - self.df["BB_Lower"]) / self.df["BB_Middle"]
+        bb = ta.volatility.BollingerBands(close=self.df["Close"], window=BB_PERIOD, window_dev=BB_STD)
+        self.df["BB_Lower"] = bb.bollinger_lband()
+        self.df["BB_Middle"] = bb.bollinger_mavg()
+        self.df["BB_Upper"] = bb.bollinger_hband()
+        self.df["BB_Width"] = (self.df["BB_Upper"] - self.df["BB_Lower"]) / self.df["BB_Middle"]
 
     def _stochastic(self):
-        stoch = ta.stoch(self.df["High"], self.df["Low"], self.df["Close"], k=STOCH_K, d=STOCH_D)
-        if stoch is not None and not stoch.empty:
-            cols = stoch.columns.tolist()
-            self.df["STOCH_K"] = stoch[cols[0]]
-            self.df["STOCH_D"] = stoch[cols[1]] if len(cols) > 1 else np.nan
+        stoch = ta.momentum.StochasticOscillator(
+            high=self.df["High"],
+            low=self.df["Low"],
+            close=self.df["Close"],
+            window=STOCH_K,
+            smooth_window=STOCH_D,
+        )
+        self.df["STOCH_K"] = stoch.stoch()
+        self.df["STOCH_D"] = stoch.stoch_signal()
 
     def _atr(self):
-        self.df["ATR"] = ta.atr(self.df["High"], self.df["Low"], self.df["Close"], length=ATR_PERIOD)
+        self.df["ATR"] = ta.volatility.AverageTrueRange(
+            high=self.df["High"],
+            low=self.df["Low"],
+            close=self.df["Close"],
+            window=ATR_PERIOD,
+        ).average_true_range()
 
     def _williams_r(self):
-        self.df["WILLIAMS_R"] = ta.willr(
-            self.df["High"], self.df["Low"], self.df["Close"], length=WILLIAMS_PERIOD
-        )
+        self.df["WILLIAMS_R"] = ta.momentum.WilliamsRIndicator(
+            high=self.df["High"],
+            low=self.df["Low"],
+            close=self.df["Close"],
+            lbp=WILLIAMS_PERIOD,
+        ).williams_r()
 
     def _cci(self):
-        self.df["CCI"] = ta.cci(
-            self.df["High"], self.df["Low"], self.df["Close"], length=CCI_PERIOD
-        )
+        self.df["CCI"] = ta.trend.CCIIndicator(
+            high=self.df["High"],
+            low=self.df["Low"],
+            close=self.df["Close"],
+            window=CCI_PERIOD,
+        ).cci()
 
     def _adx(self):
-        adx = ta.adx(self.df["High"], self.df["Low"], self.df["Close"], length=ADX_PERIOD)
-        if adx is not None and not adx.empty:
-            cols = adx.columns.tolist()
-            self.df["ADX"] = adx[cols[0]]
-            self.df["DMP"] = adx[cols[1]] if len(cols) > 1 else np.nan
-            self.df["DMN"] = adx[cols[2]] if len(cols) > 2 else np.nan
+        adx_obj = ta.trend.ADXIndicator(
+            high=self.df["High"],
+            low=self.df["Low"],
+            close=self.df["Close"],
+            window=ADX_PERIOD,
+        )
+        self.df["ADX"] = adx_obj.adx()
+        self.df["DMP"] = adx_obj.adx_pos()
+        self.df["DMN"] = adx_obj.adx_neg()
 
     def _obv(self):
-        self.df["OBV"] = ta.obv(self.df["Close"], self.df["Volume"])
+        self.df["OBV"] = ta.volume.OnBalanceVolumeIndicator(
+            close=self.df["Close"],
+            volume=self.df["Volume"],
+        ).on_balance_volume()
 
     def _volume(self):
-        self.df["Volume_SMA20"] = ta.sma(self.df["Volume"], length=20)
+        self.df["Volume_SMA20"] = ta.trend.SMAIndicator(close=self.df["Volume"].astype(float), window=20).sma_indicator()
         self.df["Volume_Ratio"] = self.df["Volume"] / self.df["Volume_SMA20"].replace(0, np.nan)
 
     def _support_resistance(self):
