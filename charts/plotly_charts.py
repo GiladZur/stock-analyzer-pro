@@ -364,6 +364,229 @@ def make_cashflow_chart(cf_df: pd.DataFrame, symbol: str) -> go.Figure | None:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Full 7-panel technical chart (all indicators)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def make_full_technical_chart(df: pd.DataFrame, symbol: str, levels: dict | None = None) -> go.Figure:
+    """
+    7-panel comprehensive chart:
+      Row 1: Candlestick + SMA/EMA + Bollinger Bands + Support/Resistance + SL/Targets
+      Row 2: Volume + OBV (scaled)
+      Row 3: RSI (14)
+      Row 4: MACD (12,26,9)
+      Row 5: Stochastic (14,3)
+      Row 6: Williams %R (14)
+      Row 7: ADX (14) + DI+ / DI-
+    """
+    row_heights = [0.35, 0.09, 0.11, 0.11, 0.11, 0.11, 0.12]
+    subtitles = (
+        f"📈 {symbol} — מחיר | ממוצעים | בולינגר | תמיכה/התנגדות",
+        "Volume + OBV",
+        "RSI (14)",
+        "MACD (12,26,9)",
+        "Stochastic (14,3)",
+        "Williams %R (14)",
+        "ADX (14) + DI+ / DI−",
+    )
+    fig = make_subplots(
+        rows=7, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.02,
+        subplot_titles=subtitles,
+        row_heights=row_heights,
+    )
+    idx = df.index
+
+    # ── Row 1: Price ─────────────────────────────────────────────────────────
+    fig.add_trace(go.Candlestick(
+        x=idx, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
+        name="OHLC",
+        increasing=dict(line=dict(color=COLORS["bullish"]), fillcolor=COLORS["bullish"]),
+        decreasing=dict(line=dict(color=COLORS["bearish"]), fillcolor=COLORS["bearish"]),
+        showlegend=False,
+    ), row=1, col=1)
+
+    for period, color_key in [(20, "sma20"), (50, "sma50"), (200, "sma200")]:
+        col = f"SMA_{period}"
+        if _has(df, col):
+            fig.add_trace(go.Scatter(
+                x=idx, y=df[col], name=f"SMA {period}",
+                line=dict(color=COLORS[color_key], width=1.5), opacity=0.85,
+            ), row=1, col=1)
+
+    for period, color_key in [(9, "ema9"), (21, "ema21")]:
+        col = f"EMA_{period}"
+        if _has(df, col):
+            fig.add_trace(go.Scatter(
+                x=idx, y=df[col], name=f"EMA {period}",
+                line=dict(color=COLORS[color_key], width=1.2, dash="dot"), opacity=0.8,
+            ), row=1, col=1)
+
+    if _has(df, "BB_Upper") and _has(df, "BB_Lower"):
+        fig.add_trace(go.Scatter(
+            x=idx, y=df["BB_Upper"], name="BB Upper",
+            line=dict(color="rgba(180,180,180,0.5)", width=1, dash="dash"),
+        ), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=idx, y=df["BB_Lower"], name="BB Lower",
+            line=dict(color="rgba(180,180,180,0.5)", width=1, dash="dash"),
+            fill="tonexty", fillcolor=COLORS["bb"],
+        ), row=1, col=1)
+
+    if _has(df, "Resistance_20"):
+        fig.add_trace(go.Scatter(
+            x=idx, y=df["Resistance_20"], name="התנגדות 20d",
+            line=dict(color="rgba(255,75,75,0.45)", width=1, dash="dot"),
+        ), row=1, col=1)
+    if _has(df, "Support_20"):
+        fig.add_trace(go.Scatter(
+            x=idx, y=df["Support_20"], name="תמיכה 20d",
+            line=dict(color="rgba(0,212,160,0.45)", width=1, dash="dot"),
+        ), row=1, col=1)
+
+    if levels:
+        sl = levels.get("stop_loss")
+        t1 = levels.get("target_1")
+        t2 = levels.get("target_2")
+        if sl:
+            fig.add_hline(y=sl, line_color=COLORS["bearish"], line_dash="dash",
+                          annotation_text=f"🛑 SL {sl:.2f}",
+                          annotation_position="bottom right", row=1, col=1)
+        if t1:
+            fig.add_hline(y=t1, line_color=COLORS["bullish"], line_dash="dash",
+                          annotation_text=f"🎯 T1 {t1:.2f}",
+                          annotation_position="top right", row=1, col=1)
+        if t2:
+            fig.add_hline(y=t2, line_color="#5bc0a0", line_dash="dot",
+                          annotation_text=f"🎯 T2 {t2:.2f}",
+                          annotation_position="top right", row=1, col=1)
+
+    # ── Row 2: Volume + OBV ───────────────────────────────────────────────────
+    bar_colors = [COLORS["bullish"] if c >= o else COLORS["bearish"]
+                  for c, o in zip(df["Close"], df["Open"])]
+    fig.add_trace(go.Bar(
+        x=idx, y=df["Volume"], name="Volume",
+        marker_color=bar_colors, opacity=0.5, showlegend=False,
+    ), row=2, col=1)
+    if _has(df, "Volume_SMA20"):
+        fig.add_trace(go.Scatter(
+            x=idx, y=df["Volume_SMA20"], name="Vol SMA20",
+            line=dict(color="orange", width=1.5), showlegend=False,
+        ), row=2, col=1)
+    if _has(df, "OBV"):
+        obv = df["OBV"]
+        vol_max = df["Volume"].max()
+        obv_range = obv.max() - obv.min()
+        obv_scaled = (obv - obv.min()) / (obv_range + 1e-9) * vol_max * 0.8 if obv_range > 0 else obv * 0
+        fig.add_trace(go.Scatter(
+            x=idx, y=obv_scaled, name="OBV (scaled)",
+            line=dict(color="#9C27B0", width=1.5, dash="dot"), opacity=0.7,
+        ), row=2, col=1)
+
+    # ── Row 3: RSI ────────────────────────────────────────────────────────────
+    if _has(df, "RSI"):
+        rsi_colors = ["rgba(255,75,75,0.6)" if v >= 70 else
+                      "rgba(0,212,160,0.6)" if v <= 30 else
+                      COLORS["rsi"] for v in df["RSI"].fillna(50)]
+        fig.add_trace(go.Scatter(
+            x=idx, y=df["RSI"], name="RSI",
+            line=dict(color=COLORS["rsi"], width=2), showlegend=False,
+            fill="tozeroy", fillcolor="rgba(100,181,246,0.06)",
+        ), row=3, col=1)
+        for level, color in [(70, "rgba(255,75,75,0.5)"), (30, "rgba(0,212,160,0.5)"), (50, "rgba(200,200,200,0.2)")]:
+            fig.add_hline(y=level, line_dash="dot", line_color=color, row=3, col=1)
+        fig.update_yaxes(range=[0, 100], row=3, col=1)
+
+    # ── Row 4: MACD ───────────────────────────────────────────────────────────
+    if _has(df, "MACD") and _has(df, "MACD_Signal"):
+        fig.add_trace(go.Scatter(
+            x=idx, y=df["MACD"], name="MACD",
+            line=dict(color=COLORS["macd"], width=2), showlegend=False,
+        ), row=4, col=1)
+        fig.add_trace(go.Scatter(
+            x=idx, y=df["MACD_Signal"], name="Signal",
+            line=dict(color=COLORS["signal"], width=1.5), showlegend=False,
+        ), row=4, col=1)
+        if _has(df, "MACD_Hist"):
+            hist_colors = [COLORS["bullish"] if v >= 0 else COLORS["bearish"]
+                           for v in df["MACD_Hist"].fillna(0)]
+            fig.add_trace(go.Bar(
+                x=idx, y=df["MACD_Hist"], name="Hist",
+                marker_color=hist_colors, opacity=0.6, showlegend=False,
+            ), row=4, col=1)
+        fig.add_hline(y=0, line_color="rgba(200,200,200,0.2)", row=4, col=1)
+
+    # ── Row 5: Stochastic ─────────────────────────────────────────────────────
+    if _has(df, "STOCH_K") and _has(df, "STOCH_D"):
+        fig.add_trace(go.Scatter(
+            x=idx, y=df["STOCH_K"], name="%K",
+            line=dict(color="#00BCD4", width=2), showlegend=False,
+        ), row=5, col=1)
+        fig.add_trace(go.Scatter(
+            x=idx, y=df["STOCH_D"], name="%D",
+            line=dict(color="#FF5722", width=1.5), showlegend=False,
+        ), row=5, col=1)
+        for level in [80, 20]:
+            fig.add_hline(y=level, line_dash="dot",
+                          line_color="rgba(255,75,75,0.4)" if level == 80 else "rgba(0,212,160,0.4)",
+                          row=5, col=1)
+        fig.update_yaxes(range=[0, 100], row=5, col=1)
+
+    # ── Row 6: Williams %R ────────────────────────────────────────────────────
+    if _has(df, "WILLIAMS_R"):
+        fig.add_trace(go.Scatter(
+            x=idx, y=df["WILLIAMS_R"], name="W%R",
+            line=dict(color="#9C27B0", width=2), showlegend=False,
+        ), row=6, col=1)
+        for lvl, col in [(-20, "rgba(255,75,75,0.4)"), (-80, "rgba(0,212,160,0.4)")]:
+            fig.add_hline(y=lvl, line_dash="dot", line_color=col, row=6, col=1)
+        fig.update_yaxes(range=[-105, 5], row=6, col=1)
+
+    # ── Row 7: ADX + DI ───────────────────────────────────────────────────────
+    if _has(df, "ADX"):
+        fig.add_trace(go.Scatter(
+            x=idx, y=df["ADX"], name="ADX",
+            line=dict(color="#FFC107", width=2.5), showlegend=False,
+        ), row=7, col=1)
+        if _has(df, "DMP"):
+            fig.add_trace(go.Scatter(
+                x=idx, y=df["DMP"], name="+DI",
+                line=dict(color=COLORS["bullish"], width=1.5), showlegend=False,
+            ), row=7, col=1)
+        if _has(df, "DMN"):
+            fig.add_trace(go.Scatter(
+                x=idx, y=df["DMN"], name="-DI",
+                line=dict(color=COLORS["bearish"], width=1.5), showlegend=False,
+            ), row=7, col=1)
+        fig.add_hline(y=25, line_dash="dot", line_color="rgba(255,193,7,0.35)", row=7, col=1)
+
+    # ── Layout ────────────────────────────────────────────────────────────────
+    fig.update_layout(
+        height=1350,
+        template=CHART_THEME,
+        paper_bgcolor="rgba(14,17,23,1)",
+        plot_bgcolor="rgba(14,17,23,1)",
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.01,
+            xanchor="right", x=1, font=dict(size=10),
+            bgcolor="rgba(0,0,0,0)",
+        ),
+        margin=dict(l=60, r=40, t=80, b=40),
+        xaxis_rangeslider_visible=False,
+        hovermode="x unified",
+    )
+    fig.update_xaxes(
+        showgrid=True, gridwidth=1, gridcolor="rgba(80,80,80,0.2)",
+        showspikes=True, spikecolor="rgba(200,200,200,0.4)",
+        spikethickness=1, spikemode="across",
+    )
+    fig.update_yaxes(
+        showgrid=True, gridwidth=1, gridcolor="rgba(80,80,80,0.2)", zeroline=False,
+    )
+    return fig
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Gauge for overall score
 # ──────────────────────────────────────────────────────────────────────────────
 

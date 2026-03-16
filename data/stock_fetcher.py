@@ -118,17 +118,58 @@ class StockFetcher:
 
             filtered: list[dict] = []
             for item in raw_news:
-                pub = item.get("providerPublishTime")
+                normalized = self._normalize_news_item(item)
+                pub = normalized.get("providerPublishTime")
                 if isinstance(pub, (int, float)):
                     if datetime.fromtimestamp(pub) >= cutoff:
-                        filtered.append(item)
+                        filtered.append(normalized)
                 else:
-                    filtered.append(item)  # include if no timestamp
+                    filtered.append(normalized)  # include if no timestamp
 
             return filtered[:25]
         except Exception as exc:
             logger.error("fetch_news(%s): %s", symbol, exc)
             return []
+
+    @staticmethod
+    def _normalize_news_item(item: dict) -> dict:
+        """Handle both old (yfinance 0.2.x) and new (yfinance 1.x) news formats."""
+        content = item.get("content", {})
+        if content and isinstance(content, dict):
+            # yfinance 1.x format — data is nested inside 'content'
+            pub_ts = None
+            pub_date = content.get("pubDate", "")
+            if pub_date:
+                try:
+                    dt = datetime.fromisoformat(pub_date.replace("Z", "+00:00"))
+                    pub_ts = dt.timestamp()
+                except Exception:
+                    pass
+
+            url = ""
+            for key in ("canonicalUrl", "clickThroughUrl", "canonical"):
+                src = content.get(key, {})
+                if isinstance(src, dict):
+                    url = src.get("url", "")
+                    if url:
+                        break
+            if not url:
+                url = content.get("url", "")
+
+            provider = content.get("provider", {})
+            publisher = provider.get("displayName", "") if isinstance(provider, dict) else str(provider)
+
+            return {
+                "title": content.get("title", ""),
+                "summary": content.get("summary", ""),
+                "link": url,
+                "url": url,
+                "publisher": publisher,
+                "providerPublishTime": pub_ts,
+            }
+
+        # Old yfinance 0.2.x format — return as-is
+        return item
 
     # ──────────────────────────────────────────────────────────────────────────
     # Convenience helpers

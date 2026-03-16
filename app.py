@@ -32,6 +32,7 @@ from charts.plotly_charts import (
     make_price_chart, make_signals_chart, make_income_chart,
     make_score_gauge, make_oscillators_chart,
     make_quarterly_chart, make_cashflow_chart,
+    make_full_technical_chart,
 )
 
 logging.basicConfig(level=logging.WARNING)
@@ -85,26 +86,46 @@ st.markdown("""
 .dataframe td, .dataframe th { font-size:0.82rem !important; }
 
 /* ── RTL / Hebrew support ────────────────────────────────────────────── */
-/* Let browser auto-detect direction per paragraph (best for mixed HE/EN) */
-[data-testid="stMarkdownContainer"] p,
-[data-testid="stMarkdownContainer"] li {
-    unicode-bidi: plaintext;
-    text-align: start;
+/* Force RTL on all markdown content */
+[data-testid="stMarkdownContainer"] {
+    direction: rtl;
+    text-align: right;
 }
-/* Analysis boxes are always Hebrew → force RTL */
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li,
+[data-testid="stMarkdownContainer"] h1,
+[data-testid="stMarkdownContainer"] h2,
+[data-testid="stMarkdownContainer"] h3,
+[data-testid="stMarkdownContainer"] h4 {
+    direction: rtl;
+    text-align: right;
+    unicode-bidi: plaintext;
+}
+/* Analysis boxes — always Hebrew */
 .analysis-box {
     direction: rtl;
     text-align: right;
 }
 /* News card text */
 .news-positive, .news-negative, .news-neutral {
+    direction: rtl;
     unicode-bidi: plaintext;
 }
-/* Sidebar Hebrew text */
-[data-testid="stSidebar"] p,
-[data-testid="stSidebar"] label {
-    unicode-bidi: plaintext;
-    text-align: start;
+/* Sidebar labels */
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] p {
+    direction: rtl;
+    text-align: right;
+}
+/* Keep numeric metric values LTR */
+[data-testid="stMetricValue"],
+[data-testid="stMetricDelta"] {
+    direction: ltr !important;
+    unicode-bidi: embed !important;
+}
+/* Tab labels */
+[data-baseweb="tab"] {
+    direction: rtl;
 }
 /* Financial table headers */
 .fin-table { width:100%; border-collapse:collapse; font-size:0.82rem; }
@@ -185,6 +206,117 @@ def init_session():
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
+
+
+def _build_html_report(
+    sym, company_name, current_price, currency_sym,
+    tech, fund, levels, info, ai_results, change,
+) -> str:
+    """Build a printable HTML report for the stock analysis."""
+    now = datetime.now().strftime("%d/%m/%Y %H:%M")
+    sig_color = {"BUY": "#00a060", "STRONG BUY": "#007040",
+                 "SELL": "#cc3333", "STRONG SELL": "#990020"}.get(tech.summary, "#666")
+    fund_color = {"BUY": "#00a060", "STRONG BUY": "#007040",
+                  "SELL": "#cc3333", "STRONG SELL": "#990020"}.get(fund.rating, "#666")
+
+    signals_rows = ""
+    for _, row in tech.signals_table().iterrows():
+        sig = row["Signal"]
+        c = "#00a060" if "BUY" in sig else "#cc3333" if "SELL" in sig else "#666"
+        signals_rows += (
+            f"<tr><td>{row['Indicator']}</td>"
+            f"<td style='color:{c};font-weight:700'>{sig}</td>"
+            f"<td>{row['Value']}</td>"
+            f"<td style='font-size:0.85em'>{row['Reason']}</td></tr>"
+        )
+
+    metrics_rows = ""
+    for k, v in fund.metrics.items():
+        if v != "N/A":
+            metrics_rows += f"<tr><td>{k}</td><td>{v}</td></tr>"
+
+    ai_tech = ai_results.get("technical", "")
+    ai_fund = ai_results.get("fundamental", "")
+    ai_summary = ai_results.get("summary", "")
+
+    return f"""<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+<meta charset="utf-8">
+<title>דוח ניתוח מניה — {sym}</title>
+<style>
+  body {{ font-family: Arial, sans-serif; background:#fff; color:#111; direction:rtl; margin:24px; }}
+  h1 {{ color:#005a9e; border-bottom:2px solid #005a9e; padding-bottom:6px; }}
+  h2 {{ color:#2c5f8a; margin-top:28px; border-bottom:1px solid #ccc; padding-bottom:4px; }}
+  table {{ width:100%; border-collapse:collapse; margin:10px 0; font-size:0.88em; }}
+  th {{ background:#005a9e; color:#fff; padding:6px 10px; text-align:right; }}
+  td {{ padding:5px 10px; border-bottom:1px solid #e0e0e0; }}
+  tr:nth-child(even) td {{ background:#f5f8fc; }}
+  .meta {{ color:#555; font-size:0.85em; margin-bottom:16px; }}
+  .ai-box {{ background:#f0f6ff; border-right:4px solid #005a9e; padding:14px; margin:10px 0;
+             border-radius:4px; white-space:pre-wrap; line-height:1.7; direction:rtl; }}
+  .grid {{ display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:12px 0; }}
+  .card {{ border:1px solid #ccc; border-radius:6px; padding:10px; text-align:center; }}
+  .card h4 {{ margin:0 0 4px; color:#666; font-size:0.72em; text-transform:uppercase; }}
+  .card p {{ margin:0; font-size:1.1em; font-weight:700; }}
+  @media print {{ body {{ margin:8px; }} }}
+</style>
+</head>
+<body>
+<h1>📈 דוח ניתוח מניה — {sym}</h1>
+<div class="meta">
+  <strong>{company_name}</strong> | {info.get('exchange','N/A')} | {info.get('sector','N/A')} | נוצר: {now}
+</div>
+
+<h2>💰 נתוני מחיר</h2>
+<div class="grid">
+  <div class="card"><h4>מחיר נוכחי</h4><p>{fmt_price(current_price, currency_sym)}</p></div>
+  <div class="card"><h4>שינוי יומי</h4>
+    <p style="color:{'#00a060' if change['pct']>=0 else '#cc3333'}">{change['pct']:+.2f}%</p></div>
+  <div class="card"><h4>סיגנל טכני</h4><p style="color:{sig_color}">{tech.summary}</p></div>
+  <div class="card"><h4>דירוג פונדמנטלי</h4><p style="color:{fund_color}">{fund.rating}</p></div>
+</div>
+
+<h2>🎯 רמות מסחר</h2>
+<div class="grid">
+  <div class="card"><h4>כניסה</h4><p style="color:#005a9e">{fmt_price(levels['entry_price'], currency_sym)}</p></div>
+  <div class="card"><h4>יעד 1</h4>
+    <p style="color:#00a060">{fmt_price(levels['target_1'], currency_sym)}<br>
+    <small>+{(levels['target_1']/current_price-1)*100:.1f}%</small></p></div>
+  <div class="card"><h4>יעד 2</h4>
+    <p style="color:#00a060">{fmt_price(levels['target_2'], currency_sym)}<br>
+    <small>+{(levels['target_2']/current_price-1)*100:.1f}%</small></p></div>
+  <div class="card"><h4>Stop Loss</h4>
+    <p style="color:#cc3333">{fmt_price(levels['stop_loss'], currency_sym)}<br>
+    <small>{(levels['stop_loss']/current_price-1)*100:.1f}%</small></p></div>
+</div>
+<p>ATR: {fmt_price(levels['atr'], currency_sym)} &nbsp;|&nbsp;
+   Risk:Reward = 1:{levels['risk_reward_ratio']:.0f} &nbsp;|&nbsp;
+   סיגנלי קנייה: {levels['buy_signals']}/{levels['total_signals']} &nbsp;|&nbsp;
+   ציון טכני: {tech.score}/10 &nbsp;|&nbsp; ציון פונדמנטלי: {fund.score}/10</p>
+
+<h2>📊 אינדיקטורים טכניים</h2>
+<table>
+<tr><th>אינדיקטור</th><th>סיגנל</th><th>ערך</th><th>סיבה</th></tr>
+{signals_rows}
+</table>
+
+<h2>📑 מדדים פונדמנטליים</h2>
+<table>
+<tr><th>מדד</th><th>ערך</th></tr>
+{metrics_rows}
+</table>
+
+{"<h2>🤖 ניתוח טכני — Claude AI</h2><div class='ai-box'>" + ai_tech + "</div>" if ai_tech else ""}
+{"<h2>🤖 ניתוח פונדמנטלי — Claude AI</h2><div class='ai-box'>" + ai_fund + "</div>" if ai_fund else ""}
+{"<h2>🤖 סיכום והמלצה — Claude AI</h2><div class='ai-box'>" + ai_summary + "</div>" if ai_summary else ""}
+
+<p style="color:#999;font-size:0.75em;margin-top:30px;border-top:1px solid #ddd;padding-top:8px;">
+⚠️ כתב ויתור: המידע באפליקציה זו הוא לצרכי מחקר ומידע בלבד ואינו מהווה ייעוץ השקעות.
+נוצר על ידי Stock Analyzer Pro | מופעל על ידי Claude AI (Anthropic)
+</p>
+</body>
+</html>"""
 
 
 init_session()
@@ -479,9 +611,9 @@ if st.session_state.get("analysis_done") and not st.session_state.get("error"):
     with tab_tech:
         st.markdown("## 📊 ניתוח טכני מלא")
 
-        # Price chart
-        fig_price = make_price_chart(df, sym, levels)
-        st.plotly_chart(fig_price, use_container_width=True)
+        # Full 7-panel chart
+        fig_full = make_full_technical_chart(df, sym, levels)
+        st.plotly_chart(fig_full, use_container_width=True)
 
         st.divider()
 
@@ -501,12 +633,6 @@ if st.session_state.get("analysis_done") and not st.session_state.get("error"):
             st.markdown("### 📊 סיגנלים — תרשים")
             fig_sig = make_signals_chart(tech.signals)
             st.plotly_chart(fig_sig, use_container_width=True)
-
-        st.divider()
-
-        # Oscillators chart
-        fig_osc = make_oscillators_chart(df, sym)
-        st.plotly_chart(fig_osc, use_container_width=True)
 
         st.divider()
 
@@ -806,6 +932,20 @@ if st.session_state.get("analysis_done") and not st.session_state.get("error"):
     # ════════════════════════════════════════════════════════════════════════
     with tab_summary:
         st.markdown("## 🎯 סיכום ניתוח — המלצה סופית")
+
+        # ── PDF / HTML report download ─────────────────────────────────────
+        html_report = _build_html_report(
+            sym, company_name, current_price, currency_sym,
+            tech, fund, levels, info, ai_results, change,
+        )
+        st.download_button(
+            label="📄 הורד דוח מלא (PDF)",
+            data=html_report,
+            file_name=f"{sym}_report_{datetime.now().strftime('%Y%m%d')}.html",
+            mime="text/html",
+            help="פתח את הקובץ בדפדפן ולחץ Ctrl+P → שמור כ-PDF",
+        )
+        st.divider()
 
         # Score overview
         avg_score = (tech.score + fund.score) / 2
