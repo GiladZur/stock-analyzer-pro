@@ -1,5 +1,10 @@
 """
-Claude AI Agents — multi-agent pipeline for stock analysis.
+AI Agents — multi-agent pipeline for stock analysis.
+
+Supports multiple AI providers:
+  - Claude (Anthropic) — default
+  - GPT-4o-mini (OpenAI)
+  - Llama 3 (Groq — free tier)
 
 Four specialized agents:
   1. TechnicalAnalystAgent   — interprets indicators and signals
@@ -11,7 +16,7 @@ import json
 import logging
 import time
 import anthropic
-from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
+from config import ANTHROPIC_API_KEY, OPENAI_API_KEY, GROQ_API_KEY, CLAUDE_MODEL, AI_MODEL_PROVIDER
 
 logger = logging.getLogger(__name__)
 
@@ -20,43 +25,93 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────────────────────
 
 class BaseAgent:
-    def __init__(self):
-        if not ANTHROPIC_API_KEY:
-            raise EnvironmentError(
-                "ANTHROPIC_API_KEY is not set. Please add it to your .env file."
-            )
-        self.client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    def __init__(self, provider: str = None, api_key: str = None):
+        self.provider = (provider or AI_MODEL_PROVIDER or "claude").lower()
         self.model = CLAUDE_MODEL
 
+        # Resolve API key
+        if api_key:
+            self.api_key = api_key
+        elif self.provider == "openai":
+            self.api_key = OPENAI_API_KEY
+        elif self.provider == "groq":
+            self.api_key = GROQ_API_KEY
+        else:
+            self.api_key = ANTHROPIC_API_KEY
+
+        if not self.api_key:
+            provider_name = {"claude": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", "groq": "GROQ_API_KEY"}.get(self.provider, "API_KEY")
+            raise EnvironmentError(
+                f"{provider_name} is not set. Please add it to your .env file or enter it in the sidebar."
+            )
+
     def _call(self, system: str, user: str, max_tokens: int = 1200, retries: int = 4) -> str:
-        """Call Claude API with exponential-backoff retry on rate-limit errors."""
+        """Call the configured AI provider with exponential-backoff retry."""
         for attempt in range(retries):
             try:
-                msg = self.client.messages.create(
-                    model=self.model,
-                    max_tokens=max_tokens,
-                    system=system,
-                    messages=[{"role": "user", "content": user}],
-                )
-                return msg.content[0].text
+                if self.provider == "openai":
+                    return self._call_openai(system, user, max_tokens)
+                elif self.provider == "groq":
+                    return self._call_groq(system, user, max_tokens)
+                else:
+                    return self._call_claude(system, user, max_tokens)
 
-            except anthropic.RateLimitError:
-                if attempt < retries - 1:
-                    wait = 12 * (attempt + 1)   # 12s → 24s → 36s → 48s
+            except Exception as exc:
+                exc_str = str(exc).lower()
+                is_rate_limit = "rate" in exc_str or "429" in exc_str or "ratelimit" in exc_str
+                if is_rate_limit and attempt < retries - 1:
+                    wait = 12 * (attempt + 1)
                     logger.warning("Rate limit hit — waiting %ds (attempt %d/%d)", wait, attempt + 1, retries)
                     time.sleep(wait)
                 else:
-                    return "⚠️ Claude API עמוס כרגע (Rate Limit). נסה שוב בעוד כמה דקות."
+                    logger.error("AI API error (%s): %s", self.provider, exc)
+                    return f"⚠️ שגיאת AI API ({self.provider}): {exc}"
 
-            except anthropic.APIConnectionError as exc:
-                logger.error("Claude API connection error: %s", exc)
-                return "⚠️ לא ניתן להתחבר ל-Claude API — בדוק API key וחיבור לאינטרנט."
+        return f"⚠️ לא ניתן לקבל תשובה מ-{self.provider} לאחר מספר נסיונות."
 
-            except Exception as exc:
-                logger.error("Claude API error: %s", exc)
-                return f"⚠️ שגיאת Claude API: {exc}"
+    def _call_claude(self, system: str, user: str, max_tokens: int) -> str:
+        """Call Anthropic Claude API."""
+        try:
+            client = anthropic.Anthropic(api_key=self.api_key)
+            msg = client.messages.create(
+                model=self.model,
+                max_tokens=max_tokens,
+                system=system,
+                messages=[{"role": "user", "content": user}],
+            )
+            return msg.content[0].text
+        except anthropic.RateLimitError:
+            raise Exception("rate limit")
+        except anthropic.APIConnectionError as exc:
+            return "⚠️ לא ניתן להתחבר ל-Claude API — בדוק API key וחיבור לאינטרנט."
 
-        return "⚠️ לא ניתן לקבל תשובה מ-Claude לאחר מספר נסיונות."
+    def _call_openai(self, system: str, user: str, max_tokens: int) -> str:
+        """Call OpenAI API (GPT-4o-mini)."""
+        import openai
+        client = openai.OpenAI(api_key=self.api_key)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            max_tokens=max_tokens,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+        return response.choices[0].message.content
+
+    def _call_groq(self, system: str, user: str, max_tokens: int) -> str:
+        """Call Groq API (Llama 3)."""
+        import groq
+        client = groq.Groq(api_key=self.api_key)
+        response = client.chat.completions.create(
+            model="llama3-70b-8192",
+            max_tokens=max_tokens,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+        return response.choices[0].message.content
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -65,6 +120,9 @@ class BaseAgent:
 
 class TechnicalAnalystAgent(BaseAgent):
     """Interprets technical indicators and generates a Hebrew narrative."""
+
+    def __init__(self, provider: str = None, api_key: str = None):
+        super().__init__(provider=provider, api_key=api_key)
 
     SYSTEM = (
         "אתה אנליסט טכני בכיר עם ניסיון של 20 שנה בשוק ההון. "
@@ -122,6 +180,9 @@ class TechnicalAnalystAgent(BaseAgent):
 class FundamentalAnalystAgent(BaseAgent):
     """Evaluates fundamental metrics and financial statements."""
 
+    def __init__(self, provider: str = None, api_key: str = None):
+        super().__init__(provider=provider, api_key=api_key)
+
     SYSTEM = (
         "אתה אנליסט פונדמנטלי מומחה. "
         "אתה מעריך מניות על בסיס מדדים פיננסיים, דוחות כספיים ואיכות עסקית. "
@@ -168,6 +229,9 @@ class FundamentalAnalystAgent(BaseAgent):
 class NewsAnalystAgent(BaseAgent):
     """Analyses recent news and assigns sentiment scores."""
 
+    def __init__(self, provider: str = None, api_key: str = None):
+        super().__init__(provider=provider, api_key=api_key)
+
     SYSTEM = (
         "אתה אנליסט חדשות פיננסי מומחה. "
         "אתה קורא חדשות, מזהה מגמות ומעריך את ההשפעה הצפויה על מחיר המניה. "
@@ -206,6 +270,9 @@ class NewsAnalystAgent(BaseAgent):
 
 class SummaryAgent(BaseAgent):
     """Synthesizes all analyses into a final investment recommendation."""
+
+    def __init__(self, provider: str = None, api_key: str = None):
+        super().__init__(provider=provider, api_key=api_key)
 
     SYSTEM = (
         "אתה מנהל תיק השקעות בכיר עם ניסיון של 25 שנה. "
@@ -317,11 +384,11 @@ class StockAnalysisOrchestrator:
     High-level entry point.  Runs all four agents and returns a dict of results.
     """
 
-    def __init__(self):
-        self.tech_agent = TechnicalAnalystAgent()
-        self.fund_agent = FundamentalAnalystAgent()
-        self.news_agent = NewsAnalystAgent()
-        self.summary_agent = SummaryAgent()
+    def __init__(self, provider: str = None, api_key: str = None):
+        self.tech_agent = TechnicalAnalystAgent(provider=provider, api_key=api_key)
+        self.fund_agent = FundamentalAnalystAgent(provider=provider, api_key=api_key)
+        self.news_agent = NewsAnalystAgent(provider=provider, api_key=api_key)
+        self.summary_agent = SummaryAgent(provider=provider, api_key=api_key)
 
     def run(
         self,

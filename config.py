@@ -16,10 +16,13 @@ def _secret(key: str, default: str = "") -> str:
         return os.getenv(key, default)
 
 ANTHROPIC_API_KEY = _secret("ANTHROPIC_API_KEY")
+OPENAI_API_KEY = _secret("OPENAI_API_KEY")
+GROQ_API_KEY = _secret("GROQ_API_KEY")
 NEWS_API_KEY = _secret("NEWS_API_KEY")  # Optional - from newsapi.org
 
 # ─── Claude Model ─────────────────────────────────────────────────────────────
 CLAUDE_MODEL = _secret("CLAUDE_MODEL") or "claude-opus-4-6"
+AI_MODEL_PROVIDER = _secret("AI_MODEL_PROVIDER") or "claude"
 
 # ─── Data Settings ────────────────────────────────────────────────────────────
 DEFAULT_PERIOD = "6mo"          # 6 months of historical data
@@ -55,6 +58,80 @@ POPULAR_IL_STOCKS = [
     "TEVA", "ICL", "NICE", "CHKP", "WIX", "FVRR", "MNDY",
     "CYBR", "GILT", "PERI", "SMHI", "ESLT", "ELBIT"
 ]
+
+# ── TASE-only stocks (trade only on Tel Aviv Stock Exchange) ──────────────────
+# Grouped by sector for the sidebar quick-access panel
+TASE_POPULAR = {
+    "🏦 בנקים": [
+        ("לאומי",    "LUMI.TA"),
+        ("פועלים",   "POLI.TA"),
+        ("דיסקונט",  "DSCT.TA"),
+        ("מזרחי",    "MZTF.TA"),
+        ("הבינלאומי","FIBI.TA"),
+    ],
+    "🛡️ ביטוח": [
+        ("הפניקס",   "PHOE.TA"),
+        ("הראל",     "HARL.TA"),
+        ("מגדל",     "MGDL.TA"),
+        ("כלל ביטוח","CALI.TA"),
+        ("מנורה",    "MNRA.TA"),
+    ],
+    "🏗️ נדל\"ן": [
+        ("עזריאלי",  "AZRG.TA"),
+        ("אמות",     "AMOT.TA"),
+        ("גב-ים",    "GVIM.TA"),
+        ("מליסרון",  "MLSR.TA"),
+    ],
+    "🏭 תעשייה": [
+        ("תורפז",    "TPAZ.TA"),
+        ("אלביט",    "ESLT.TA"),
+        ("רפאל",     "RPHI.TA"),
+        ("אל-על",    "ELAL.TA"),
+        ("אלקטרה",   "ELTR.TA"),
+    ],
+    "💊 פארמה": [
+        ("טבע",      "TEVA"),
+        ("גלקסו",    "GLSL.TA"),
+        ("פריגו",    "PRGO"),
+    ],
+    "💻 טכנולוגיה": [
+        ("סאפ ישראל","SAP.TA"),
+        ("רדקום",    "RDCM.TA"),
+        ("ויקס",     "WIX"),
+        ("מאנדיי",   "MNDY"),
+    ],
+}
+
+# ── Hebrew name → ticker lookup (for search-by-name) ─────────────────────────
+TASE_NAME_MAP: dict[str, str] = {}
+for _sector, _stocks in TASE_POPULAR.items():
+    for _name, _ticker in _stocks:
+        TASE_NAME_MAP[_name] = _ticker
+        TASE_NAME_MAP[_name.replace("-", "")] = _ticker  # variant without hyphen
+
+# Additional aliases / common misspellings
+TASE_NAME_MAP.update({
+    "בנק לאומי":    "LUMI.TA",
+    "בנק פועלים":   "POLI.TA",
+    "בנק דיסקונט":  "DSCT.TA",
+    "מזרחי טפחות":  "MZTF.TA",
+    "בנק הבינלאומי":"FIBI.TA",
+    "phoenix":      "PHOE.TA",
+    "leumi":        "LUMI.TA",
+    "hapoalim":     "POLI.TA",
+    "discount":     "DSCT.TA",
+    "mizrahi":      "MZTF.TA",
+    "azrieli":      "AZRG.TA",
+    "turpaz":       "TPAZ.TA",
+    "elbit":        "ESLT.TA",
+    "harel":        "HARL.TA",
+    "migdal":       "MGDL.TA",
+    "menora":       "MNRA.TA",
+    "amot":         "AMOT.TA",
+    "electra":      "ELTR.TA",
+    "rafael":       "RPHI.TA",
+    "elal":         "ELAL.TA",
+})
 
 # ─── Chart Settings ───────────────────────────────────────────────────────────
 CHART_THEME = "plotly_dark"

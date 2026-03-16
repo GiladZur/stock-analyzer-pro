@@ -21,11 +21,13 @@ st.set_page_config(
 
 # ─── Imports ──────────────────────────────────────────────────────────────────
 from config import (
-    ANTHROPIC_API_KEY, DEFAULT_PERIOD, EXTENDED_PERIOD,
-    POPULAR_IL_STOCKS, APP_TITLE,
+    ANTHROPIC_API_KEY, OPENAI_API_KEY, GROQ_API_KEY,
+    DEFAULT_PERIOD, EXTENDED_PERIOD,
+    POPULAR_IL_STOCKS, TASE_POPULAR, APP_TITLE,
 )
 from data.stock_fetcher import StockFetcher
 from data.news_fetcher import NewsFetcher
+from data.market_overview import get_market_overview
 from analysis.technical import TechnicalAnalyzer
 from analysis.fundamental import FundamentalAnalyzer
 from charts.plotly_charts import (
@@ -34,6 +36,7 @@ from charts.plotly_charts import (
     make_quarterly_chart, make_cashflow_chart,
     make_full_technical_chart,
 )
+from utils.pdf_report import build_pdf_report
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -406,6 +409,10 @@ def _fetch_news(symbol: str):
 def _fetch_change(symbol: str):
     return StockFetcher().get_price_change(symbol)
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_market_overview():
+    return get_market_overview()
+
 
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 
@@ -418,9 +425,9 @@ with st.sidebar:
     st.markdown("### 🔍 חיפוש מניה")
     symbol_input = st.text_input(
         "סימבול מניה",
-        placeholder="לדוגמה: AAPL / TEVA / ESLT.TA",
-        help="מניות ישראליות: הוסף .TA בסוף (לדוגמה ESLT.TA) או בחר בשוק ישראל",
-    ).strip().upper()
+        placeholder="AAPL / LUMI.TA / לאומי / פועלים / הפניקס",
+        help="ניתן להקליד: סימבול (AAPL), סימבול ישראלי (LUMI.TA), או שם בעברית (לאומי, פועלים, הפניקס...)",
+    ).strip()
 
     market = st.selectbox(
         "שוק",
@@ -440,33 +447,74 @@ with st.sidebar:
     # AI Settings
     st.markdown("### 🤖 הגדרות AI")
     run_ai = st.toggle(
-        "הפעל ניתוח Claude AI",
+        "הפעל ניתוח AI",
         value=True,
-        help="נדרש ANTHROPIC_API_KEY ב-.env",
+        help="נדרש API key של הספק הנבחר ב-.env",
     )
 
-    if run_ai and not ANTHROPIC_API_KEY:
-        st.warning("⚠️ ANTHROPIC_API_KEY חסר ב-.env  \nהניתוח האלגוריתמי יעבוד ללא AI.")
+    # Provider selection
+    _provider_options = {
+        "claude": "🤖 Claude (Anthropic)",
+        "openai": "🤖 GPT-4o-mini (OpenAI)",
+        "groq": "⚡ Llama 3 (Groq - חינם)",
+    }
+    ai_provider = st.selectbox(
+        "ספק AI",
+        options=list(_provider_options.keys()),
+        format_func=lambda x: _provider_options[x],
+        help="בחר את ספק הAI המועדף",
+    )
+
+    # API key input for selected provider
+    _default_keys = {"claude": ANTHROPIC_API_KEY, "openai": OPENAI_API_KEY, "groq": GROQ_API_KEY}
+    _placeholders = {
+        "claude": "sk-ant-...",
+        "openai": "sk-...",
+        "groq": "gsk_...",
+    }
+    _sidebar_key = st.text_input(
+        f"API Key ({_provider_options[ai_provider].split(' ')[1]})",
+        value=_default_keys.get(ai_provider, ""),
+        type="password",
+        placeholder=_placeholders.get(ai_provider, ""),
+        help="ניתן גם להגדיר ב-.env",
+    )
+    # Use sidebar key if provided, else fall back to env
+    ai_api_key = _sidebar_key.strip() if _sidebar_key.strip() else _default_keys.get(ai_provider, "")
+
+    if run_ai and not ai_api_key:
+        st.warning(f"⚠️ API Key חסר עבור {_provider_options[ai_provider]}  \nהניתוח האלגוריתמי יעבוד ללא AI.")
         run_ai = False
 
     st.divider()
 
-    # Popular stocks
+    # ── Popular stocks ────────────────────────────────────────────────────
     st.markdown("### ⚡ מניות פופולריות")
-    popular_us = ["AAPL", "MSFT", "NVDA", "TSLA", "GOOGL", "META", "AMZN"]
-    popular_il = ["ESLT.TA", "CHKP", "NICE", "TEVA", "ICL.TA", "MNDY", "WIX"]
 
     st.markdown("🇺🇸 **ארה\"ב**")
-    cols = st.columns(4)
+    popular_us = ["AAPL", "MSFT", "NVDA", "TSLA", "GOOGL", "META", "AMZN"]
+    cols_us = st.columns(4)
     for i, s in enumerate(popular_us):
-        if cols[i % 4].button(s, key=f"us_{s}", use_container_width=True):
+        if cols_us[i % 4].button(s, key=f"us_{s}", use_container_width=True):
             st.session_state["symbol"] = s
 
-    st.markdown("🇮🇱 **ישראל**")
-    cols2 = st.columns(3)
-    for i, s in enumerate(popular_il):
-        if cols2[i % 3].button(s, key=f"il_{s}", use_container_width=True):
-            st.session_state["symbol"] = s
+    st.divider()
+
+    # ── Israeli stocks — TASE-only grouped by sector ──────────────────────
+    st.markdown("🇮🇱 **ישראל — לפי ענף**")
+    st.caption("💡 ניתן לחפש בעברית: לאומי, פועלים, הפניקס...")
+    for sector_label, sector_stocks in TASE_POPULAR.items():
+        with st.expander(sector_label, expanded=False):
+            scols = st.columns(2)
+            for idx, (heb_name, ticker) in enumerate(sector_stocks):
+                btn_label = f"{heb_name}\n{ticker}"
+                if scols[idx % 2].button(
+                    f"{heb_name} ({ticker})",
+                    key=f"tase_{ticker}",
+                    use_container_width=True,
+                ):
+                    st.session_state["symbol"] = ticker
+                    st.session_state["market"]  = "auto"
 
     # Use session symbol if set by button
     if st.session_state.get("symbol") and not symbol_input:
@@ -480,6 +528,65 @@ with st.sidebar:
 
 st.markdown(f"# {APP_TITLE}")
 st.markdown("*ניתוח מניות מתקדם עם בינה מלאכותית — ניתוח טכני, פונדמנטלי, חדשות והמלצה*")
+
+# ─── Market Overview ──────────────────────────────────────────────────────────
+
+try:
+    market_data = _fetch_market_overview()
+    st.session_state["market_data"] = market_data
+
+    mkt_color = market_data.get("color", "#888888")
+    mkt_condition = market_data.get("condition", "")
+    mkt_score = market_data.get("score", 5.0)
+
+    st.markdown(
+        f'<div style="background:#161B22;border:1px solid #30363d;border-radius:10px;'
+        f'padding:14px 20px;margin-bottom:12px;">'
+        f'<span style="color:{mkt_color};font-size:1.1rem;font-weight:700">'
+        f'🌐 מצב השוק: {mkt_condition}</span>'
+        f'<span style="color:#8B949E;font-size:0.85rem;margin-right:16px"> | '
+        f'ציון בריאות שוק: <b style="color:{mkt_color}">{mkt_score}/10</b></span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    indices = market_data.get("indices", {})
+    if indices:
+        mkt_cols = st.columns(len(indices))
+        for col_idx, (name, data) in enumerate(indices.items()):
+            price = data.get("price", 0)
+            pct = data.get("change_pct", 0)
+            pct_color = "#00d4a0" if pct >= 0 else "#ff4b4b"
+            arrow = "▲" if pct >= 0 else "▼"
+
+            # VIX danger indicator
+            extra = ""
+            if "VIX" in name:
+                if price > 30:
+                    extra = " ⚠️"
+                elif price < 15:
+                    extra = " ✅"
+                price_str = f"{price:.1f}{extra}"
+            elif price > 10000:
+                price_str = f"{price:,.0f}"
+            elif price > 100:
+                price_str = f"{price:,.2f}"
+            else:
+                price_str = f"{price:.2f}"
+
+            with mkt_cols[col_idx]:
+                st.markdown(
+                    f'<div class="metric-card">'
+                    f'<h4>{name}</h4>'
+                    f'<p>{price_str}</p>'
+                    f'<span style="color:{pct_color};font-size:0.85rem;font-weight:700">'
+                    f'{arrow} {abs(pct):.2f}%</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+    st.divider()
+except Exception:
+    pass  # Market overview is non-critical — never break the main app
 
 # ─── Analysis trigger ─────────────────────────────────────────────────────────
 
@@ -526,7 +633,7 @@ if analyze_btn and symbol_input:
         ai_results = {}
         if run_ai:
             from agents.claude_agent import StockAnalysisOrchestrator
-            orchestrator = StockAnalysisOrchestrator()
+            orchestrator = StockAnalysisOrchestrator(provider=ai_provider, api_key=ai_api_key)
 
             def _progress(pct, msg):
                 progress_bar.progress(int(55 + pct * 40))
@@ -1018,23 +1125,37 @@ if st.session_state.get("analysis_done") and not st.session_state.get("error"):
     with tab_summary:
         st.markdown("## 🎯 סיכום ניתוח — המלצה סופית")
 
-        # ── PDF / HTML report download ─────────────────────────────────────
-        html_report = _build_html_report(
-            sym, company_name, current_price, currency_sym,
-            tech, fund, levels, info, ai_results, change,
-        )
-        st.download_button(
-            label="📄 הורד דוח מלא → PDF",
-            data=html_report,
-            file_name=f"{sym}_report_{datetime.now().strftime('%Y%m%d')}.html",
-            mime="text/html",
-            help="הקובץ נפתח בדפדפן ומציג את דיאלוג ההדפסה אוטומטית — בחר 'שמור כ-PDF'",
-        )
-        st.caption("💡 לאחר הורדה: פתח את הקובץ בדפדפן → יפתח חלון הדפסה אוטומטית → בחר **שמור כ-PDF**")
+        # ── PDF report download ────────────────────────────────────────────
+        try:
+            pdf_bytes = build_pdf_report(
+                sym, company_name, current_price, currency_sym,
+                tech, fund, levels, info, ai_results, change, news_items,
+            )
+            st.download_button(
+                label="📄 הורד דוח PDF",
+                data=pdf_bytes,
+                file_name=f"{sym}_report_{datetime.now().strftime('%Y%m%d')}.pdf",
+                mime="application/pdf",
+            )
+        except Exception as _pdf_exc:
+            # Fallback to HTML report if fpdf2 fails
+            html_report = _build_html_report(
+                sym, company_name, current_price, currency_sym,
+                tech, fund, levels, info, ai_results, change,
+            )
+            st.download_button(
+                label="📄 הורד דוח מלא → PDF",
+                data=html_report,
+                file_name=f"{sym}_report_{datetime.now().strftime('%Y%m%d')}.html",
+                mime="text/html",
+                help="הקובץ נפתח בדפדפן ומציג את דיאלוג ההדפסה אוטומטית — בחר 'שמור כ-PDF'",
+            )
+            st.caption(f"💡 לאחר הורדה: פתח את הקובץ בדפדפן → יפתח חלון הדפסה אוטומטית → בחר **שמור כ-PDF**  \n(שגיאת PDF: {_pdf_exc})")
         st.divider()
 
-        # Score overview
-        avg_score = (tech.score + fund.score) / 2
+        # Score overview — both tech.score and fund.score are now 1-10
+        market_score = st.session_state.get("market_data", {}).get("score", 5.0)
+        avg_score = round(tech.score * 0.45 + fund.score * 0.45 + market_score * 0.10, 1)
         sc1, sc2, sc3 = st.columns(3)
         with sc1:
             fig_tech_g = make_score_gauge(tech.score, "📊 ציון טכני")

@@ -444,11 +444,13 @@ class TechnicalAnalyzer:
 
     @property
     def score(self) -> float:
-        """Numeric score −10 … +10."""
+        """Numeric score 1–10 (normalised from buy/sell ratio)."""
         buy = self.levels.get("buy_signals", 0)
         sell = self.levels.get("sell_signals", 0)
         total = self.levels.get("total_signals", 1)
-        return round((buy - sell) / total * 10, 1)
+        raw = (buy - sell) / total * 10   # -10 … +10
+        # Map -10…+10 → 1…10
+        return round(max(1.0, min(10.0, (raw + 10) / 20 * 9 + 1)), 1)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Helpers

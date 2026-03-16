@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import logging
-from config import TASE_SUFFIX, POPULAR_IL_STOCKS, DEFAULT_PERIOD, DEFAULT_INTERVAL
+from config import TASE_SUFFIX, POPULAR_IL_STOCKS, DEFAULT_PERIOD, DEFAULT_INTERVAL, TASE_NAME_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +25,26 @@ class StockFetcher:
     def normalize_symbol(symbol: str, market: str = "auto") -> str:
         """Return the correct yfinance ticker string.
 
-        Israeli stocks on TASE trade with the ``.TA`` suffix in yfinance.
+        Handles:
+        - Hebrew company names (e.g. 'לאומי' → 'LUMI.TA')
+        - English name aliases (e.g. 'leumi' → 'LUMI.TA')
+        - Israeli stocks on TASE with the ``.TA`` suffix in yfinance.
         """
-        symbol = symbol.strip().upper()
+        symbol = symbol.strip()
 
+        # ── 1. Hebrew / alias name lookup (before uppercasing) ───────────────
+        lookup = TASE_NAME_MAP.get(symbol) or TASE_NAME_MAP.get(symbol.lower())
+        if lookup:
+            return lookup
+
+        symbol = symbol.upper()
+
+        # ── 2. After uppercasing, try English alias lookup ────────────────────
+        lookup_upper = TASE_NAME_MAP.get(symbol.lower())
+        if lookup_upper:
+            return lookup_upper
+
+        # ── 3. Market-based suffix logic ─────────────────────────────────────
         if market == "israel":
             if not symbol.endswith(TASE_SUFFIX):
                 symbol = symbol + TASE_SUFFIX
