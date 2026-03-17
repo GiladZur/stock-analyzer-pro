@@ -268,14 +268,18 @@ class SummaryAgent(BaseAgent):
         self,
         symbol: str,
         company_name: str,
-        tech_summary: str,
-        fund_summary: str,
-        news_summary: str,
+        tech_summary,
+        fund_summary,
+        news_summary,
         tech_score: float,
         fund_score: float,
         levels: dict,
         info: dict,
     ) -> str:
+        # Guard against None values from failed agent calls
+        tech_summary  = tech_summary  or "ניתוח טכני לא זמין."
+        fund_summary  = fund_summary  or "ניתוח פונדמנטלי לא זמין."
+        news_summary  = news_summary  or "ניתוח חדשות לא זמין."
         sector = info.get("sector", "N/A")
         market_cap = info.get("marketCap", 0)
         market_cap_str = f"${market_cap/1e9:.1f}B" if market_cap and market_cap > 1e9 else f"${market_cap/1e6:.0f}M" if market_cap else "N/A"
@@ -402,31 +406,32 @@ class StockAnalysisOrchestrator:
 
         if progress_callback:
             progress_callback(0.1, "🔍 סוכן ניתוח טכני...")
-        results["technical"] = self.tech_agent.analyze(symbol, signals, levels, company_name)
+        results["technical"] = self.tech_agent.analyze(symbol, signals, levels, company_name) or None
 
         if progress_callback:
             progress_callback(0.35, "📑 סוכן ניתוח פונדמנטלי...")
         results["fundamental"] = self.fund_agent.analyze(
             symbol, metrics, fund_summary_text, fund_score, fund_rating
-        )
+        ) or None
 
         if progress_callback:
             progress_callback(0.60, "📰 סוכן ניתוח חדשות...")
-        results["news"] = self.news_agent.analyze(symbol, news_text, company_name)
+        results["news"] = self.news_agent.analyze(symbol, news_text, company_name) or None
 
         if progress_callback:
             progress_callback(0.80, "🎯 סוכן סיכום והמלצות...")
+        # Pass safe fallback strings so summary agent never receives None
         results["summary"] = self.summary_agent.generate(
             symbol=symbol,
             company_name=company_name,
-            tech_summary=results["technical"],
-            fund_summary=results["fundamental"],
-            news_summary=results["news"],
+            tech_summary=results["technical"] or "ניתוח טכני לא זמין.",
+            fund_summary=results["fundamental"] or "ניתוח פונדמנטלי לא זמין.",
+            news_summary=results["news"] or "ניתוח חדשות לא זמין.",
             tech_score=tech_score,
             fund_score=fund_score,
             levels=levels,
             info=info,
-        )
+        ) or None
 
         if progress_callback:
             progress_callback(1.0, "✅ הניתוח הושלם!")
