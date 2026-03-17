@@ -956,6 +956,16 @@ elif analyze_btn and not symbol_input:
 
 # ─── Display results ──────────────────────────────────────────────────────────
 
+def _ai_ok(text) -> bool:
+    """Return True only if text is real AI analysis, not an error message."""
+    if not text or not isinstance(text, str):
+        return False
+    err_markers = ("error code:", "api_error", "internal server error",
+                   "שגיאת ai api", "⚠️", "לא ניתן לקבל תשובה", "לא ניתן להתחבר")
+    tl = text.lower()
+    return not any(m in tl for m in err_markers)
+
+
 if st.session_state.get("analysis_done") and not st.session_state.get("error"):
 
     sym = st.session_state["symbol"]
@@ -1134,13 +1144,15 @@ if st.session_state.get("analysis_done") and not st.session_state.get("error"):
         st.divider()
 
         # Claude AI technical analysis
-        if run_ai_done and ai_results.get("technical"):
+        if run_ai_done and _ai_ok(ai_results.get("technical")):
             st.markdown("### 🤖 ניתוח טכני — Claude AI")
             st.markdown(
                 f'<div class="analysis-box">{ai_results["technical"]}</div>',
                 unsafe_allow_html=True,
             )
-        elif not run_ai_done:
+        elif run_ai_done:
+            st.info("💡 ניתוח AI לא זמין כרגע — נסה שוב בעוד מספר דקות")
+        else:
             st.info("💡 הפעל Claude AI בסרגל הצד לקבלת ניתוח מעמיק יותר")
 
     # ════════════════════════════════════════════════════════════════════════
@@ -1343,7 +1355,7 @@ if st.session_state.get("analysis_done") and not st.session_state.get("error"):
         st.divider()
 
         # Claude AI fundamental analysis
-        if run_ai_done and ai_results.get("fundamental"):
+        if run_ai_done and _ai_ok(ai_results.get("fundamental")):
             st.markdown("### 🤖 ניתוח פונדמנטלי — Claude AI")
             st.markdown(
                 f'<div class="analysis-box">{ai_results["fundamental"]}</div>',
@@ -1407,7 +1419,7 @@ if st.session_state.get("analysis_done") and not st.session_state.get("error"):
         st.divider()
 
         # Claude AI news analysis
-        if run_ai_done and ai_results.get("news"):
+        if run_ai_done and _ai_ok(ai_results.get("news")):
             st.markdown("### 🤖 ניתוח חדשות — Claude AI")
             st.markdown(
                 f'<div class="analysis-box">{ai_results["news"]}</div>',
@@ -1484,7 +1496,7 @@ if st.session_state.get("analysis_done") and not st.session_state.get("error"):
         st.divider()
 
         # Claude AI summary
-        if run_ai_done and ai_results.get("summary"):
+        if run_ai_done and _ai_ok(ai_results.get("summary")):
             st.markdown("### 🤖 ניתוח מלא ממוחה — Claude AI")
             st.markdown(
                 f'<div class="analysis-box">{ai_results["summary"]}</div>',

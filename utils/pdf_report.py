@@ -121,6 +121,19 @@ def _clean_markdown(text: str) -> str:
     return text
 
 
+def _is_ai_error(text) -> bool:
+    """Return True if text is an API error message rather than real AI analysis."""
+    if not text or not isinstance(text, str):
+        return True
+    _ERROR_MARKERS = (
+        "error code:", "api_error", "internal server error",
+        "שגיאת ai api", "שגיאת", "rate limit", "connection error",
+        "⚠️", "לא ניתן לקבל תשובה", "לא ניתן להתחבר",
+    )
+    tl = text.lower()
+    return any(m in tl for m in _ERROR_MARKERS)
+
+
 # ─── CSS ──────────────────────────────────────────────────────────────────────
 
 _CSS = """
@@ -1172,11 +1185,13 @@ def build_html_report(
         ("summary",     "🤖 סיכום והמלצה — AI Summary & Recommendation",   "#6a1b9a"),
     ]
 
-    has_ai = bool(ai_results and any(ai_results.get(k) for k, _, _ in ai_sections_def))
+    # Filter out error/None results — only show real AI analysis
+    clean_ai = {k: v for k, v in (ai_results or {}).items() if not _is_ai_error(v)}
+    has_ai = bool(clean_ai and any(clean_ai.get(k) for k, _, _ in ai_sections_def))
 
     if has_ai:
         for section_key, section_title, hdr_color in ai_sections_def:
-            text = (ai_results or {}).get(section_key, "") or ""
+            text = clean_ai.get(section_key, "") or ""
             if not text:
                 continue
             clean_text = _clean_markdown(text)
@@ -1190,10 +1205,16 @@ def build_html_report(
                 f'</div>'
             )
     else:
+        had_errors = bool(ai_results and any(ai_results.values()))
+        msg = (
+            'ניתוח ה-AI נכשל עקב שגיאת שרת זמנית. נסה שוב בעוד מספר דקות.'
+            if had_errors else
+            'ניתוח AI לא הופעל. כדי להפעיל — סמן "הפעל ניתוח AI" בסרגל הצד והזן API Key.'
+        )
         parts.append(
-            '<p style="color:#888;font-style:italic">'
-            'AI analysis was not run. To enable, toggle "Activate AI Analysis" in the sidebar '
-            'and ensure your API key is configured.</p>'
+            f'<p style="color:#888;font-style:italic;padding:12px;'
+            f'background:#fafafa;border-radius:6px;border:1px dashed #ccc">'
+            f'{_esc(msg)}</p>'
         )
 
     parts.append('</div></div>')  # end section

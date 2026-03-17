@@ -54,15 +54,18 @@ class BaseAgent:
             except Exception as exc:
                 exc_str = str(exc).lower()
                 is_rate_limit = "rate" in exc_str or "429" in exc_str or "ratelimit" in exc_str
-                if is_rate_limit and attempt < retries - 1:
-                    wait = 12 * (attempt + 1)
-                    logger.warning("Rate limit hit — waiting %ds (attempt %d/%d)", wait, attempt + 1, retries)
+                is_server_err = "500" in exc_str or "internal server error" in exc_str or "529" in exc_str
+                should_retry = (is_rate_limit or is_server_err) and attempt < retries - 1
+                if should_retry:
+                    wait = 8 * (attempt + 1) if is_server_err else 12 * (attempt + 1)
+                    logger.warning("API error (%s) — waiting %ds (attempt %d/%d): %s",
+                                   self.provider, wait, attempt + 1, retries, exc)
                     time.sleep(wait)
                 else:
                     logger.error("AI API error (%s): %s", self.provider, exc)
-                    return f"⚠️ שגיאת AI API ({self.provider}): {exc}"
+                    return None  # Return None instead of error string
 
-        return f"⚠️ לא ניתן לקבל תשובה מ-{self.provider} לאחר מספר נסיונות."
+        return None  # Return None after all retries exhausted
 
     def _call_claude(self, system: str, user: str, max_tokens: int) -> str:
         """Call Anthropic Claude API."""
