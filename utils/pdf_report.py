@@ -403,8 +403,12 @@ def build_html_report(
             vix_lbl = "Low Risk" if vix_v < 20 else "High Risk" if vix_v > 30 else "Moderate Risk"
             mkt_details.append(f"VIX: {vix_v:.1f} ({vix_lbl})")
         fg = market_data.get("fear_greed")
-        if fg:
-            mkt_details.append(f"Fear & Greed: {fg:.0f}/100")
+        if fg is not None:
+            try:
+                fg_val = float(fg["score"]) if isinstance(fg, dict) else float(fg)
+                mkt_details.append(f"Fear & Greed: {fg_val:.0f}/100")
+            except (TypeError, ValueError, KeyError):
+                pass
 
     # ── Final weighted score ──────────────────────────────────────────────────
     # Weights: technical 35%, fundamental 35%, news 20%, market 10%
