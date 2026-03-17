@@ -681,14 +681,15 @@ def build_html_report(
     # 5B — Indicator values (2 column layout)
     parts.append('<h3 style="margin:18px 0 10px;color:#0288d1;font-size:0.95rem">ערכי אינדיקטורים — Indicator Values</h3>')
 
+    # Column names as they actually appear in TechnicalAnalyzer.df
     ind_value_map = [
         ("RSI (14)",        "RSI"),
         ("MACD",            "MACD"),
         ("MACD Signal",     "MACD_Signal"),
         ("MACD Histogram",  "MACD_Hist"),
-        ("Stochastic %K",   "Stoch_K"),
-        ("Stochastic %D",   "Stoch_D"),
-        ("Williams %R",     "Williams_R"),
+        ("Stochastic %K",   "STOCH_K"),
+        ("Stochastic %D",   "STOCH_D"),
+        ("Williams %R",     "WILLIAMS_R"),
         ("CCI (20)",        "CCI"),
         ("ADX (14)",        "ADX"),
         ("ATR (14)",        "ATR"),

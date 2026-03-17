@@ -1056,28 +1056,31 @@ if st.session_state.get("analysis_done") and not st.session_state.get("error"):
     # ── Generate chart ONCE (used in both tab display and PDF) ───────────────
     fig_full = make_full_technical_chart(tech.df, sym, levels)
 
-    # ── HTML report download — top left, always visible ──────────────────────
-    _dl_col, _spacer = st.columns([1, 3])
-    with _dl_col:
-        try:
-            from utils.pdf_report import build_html_report
-            _html_report = build_html_report(
-                sym, company_name, current_price, currency_sym,
-                tech, fund, levels, info, ai_results, change, news_items,
-                df=df,
-                chart_fig=fig_full,
-            )
+    # ── HTML report download — prominent, top of page ────────────────────────
+    try:
+        from utils.pdf_report import build_html_report
+        _html_bytes = build_html_report(
+            sym, company_name, current_price, currency_sym,
+            tech, fund, levels, info, ai_results, change, news_items,
+            df=df,
+            chart_fig=fig_full,
+        ).encode("utf-8")
+        _dl_col, _info_col = st.columns([1, 3])
+        with _dl_col:
             st.download_button(
-                label="📥 הורד דוח מלא (HTML)",
-                data=_html_report,
+                label="📥 הורד דוח מלא",
+                data=_html_bytes,
                 file_name=f"{sym}_report_{datetime.now().strftime('%Y%m%d_%H%M')}.html",
                 mime="text/html",
                 use_container_width=True,
                 type="primary",
             )
-            st.caption("💡 פתח בדפדפן ← הדפס ← שמור כ-PDF")
-        except Exception as _rpt_exc:
-            st.warning(f"⚠️ שגיאה ביצירת הדוח: {_rpt_exc}")
+        with _info_col:
+            st.info("💡 **הורדת דוח HTML מלא** — פתח את הקובץ בדפדפן, ואז הדפס (Ctrl+P) ← שמור כ-PDF", icon="ℹ️")
+    except Exception as _rpt_exc:
+        import traceback
+        st.warning(f"⚠️ שגיאה ביצירת הדוח: {_rpt_exc}")
+        st.code(traceback.format_exc(), language="text")
 
     st.divider()
 
