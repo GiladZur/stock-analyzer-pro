@@ -351,6 +351,7 @@ def build_html_report(
     news_items: list,
     df=None,         # raw OHLC DataFrame (optional, not used in HTML)
     chart_fig=None,  # Plotly figure (optional)
+    market_data=None,   # market context dict (optional)
 ) -> str:
     """Returns complete self-contained HTML string for the stock analysis report."""
 
@@ -366,6 +367,62 @@ def build_html_report(
     tech_signals = getattr(tech, "signals", {}) or {}
     tech_df = getattr(tech, "df", None)
     fund_metrics = getattr(fund, "metrics", {}) or {}
+
+    # ── News sentiment score (0–10 from news items) ─────────────────────────
+    pos_news = sum(1 for n in (news_items or []) if "pos" in str(n.get("sentiment","")).lower())
+    neg_news = sum(1 for n in (news_items or []) if "neg" in str(n.get("sentiment","")).lower())
+    neu_news = max(0, len(news_items or []) - pos_news - neg_news)
+    total_news = pos_news + neg_news + neu_news
+    if total_news > 0:
+        news_score = round(min(10.0, max(1.0, (pos_news * 10 + neu_news * 5 + neg_news * 1) / total_news)), 1)
+    else:
+        news_score = 5.0
+    news_rating = "POSITIVE" if news_score >= 7 else "NEGATIVE" if news_score <= 4 else "NEUTRAL"
+
+    # ── Market context score from market_data ────────────────────────────────
+    mkt_score_val = 5.0
+    mkt_label = "NEUTRAL"
+    mkt_details = []
+    if market_data and isinstance(market_data, dict):
+        # determine if US or IL stock
+        is_il = ".TA" in str(sym).upper() or (info or {}).get("currency") == "ILS"
+        if is_il:
+            mkt_score_val = float(market_data.get("il_score", 5.0) or 5.0)
+        else:
+            mkt_score_val = float(market_data.get("us_score", 5.0) or 5.0)
+        mkt_label = "BULL" if mkt_score_val >= 7 else "BEAR" if mkt_score_val <= 4 else "NEUTRAL"
+        # Build details
+        us_data = market_data.get("us_data", {}) or {}
+        sp_d = us_data.get("S&P500", {})
+        if sp_d:
+            sp_chg = sp_d.get("change_pct", 0) or 0
+            mkt_details.append(f"S&P 500: {sp_chg:+.2f}%")
+        vix_d = us_data.get("VIX", {})
+        if vix_d:
+            vix_v = vix_d.get("price", 20) or 20
+            vix_lbl = "Low Risk" if vix_v < 20 else "High Risk" if vix_v > 30 else "Moderate Risk"
+            mkt_details.append(f"VIX: {vix_v:.1f} ({vix_lbl})")
+        fg = market_data.get("fear_greed")
+        if fg:
+            mkt_details.append(f"Fear & Greed: {fg:.0f}/100")
+
+    # ── Final weighted score ──────────────────────────────────────────────────
+    # Weights: technical 35%, fundamental 35%, news 20%, market 10%
+    W_TECH = 0.35
+    W_FUND = 0.35
+    W_NEWS = 0.20
+    W_MKT  = 0.10
+    final_score = round(
+        tech_score * W_TECH + fund_score * W_FUND + news_score * W_NEWS + mkt_score_val * W_MKT,
+        1
+    )
+    final_rating = (
+        "STRONG BUY"  if final_score >= 8.0 else
+        "BUY"         if final_score >= 6.5 else
+        "NEUTRAL"     if final_score >= 4.5 else
+        "SELL"        if final_score >= 3.0 else
+        "STRONG SELL"
+    )
 
     price_str = _fmt_price(current_price, currency_sym)
 
@@ -418,6 +475,29 @@ def build_html_report(
         '</tr>'
         '</table>'
     )
+
+    # Quick score overview (4 bars)
+    score_items = [
+        ("\U0001f4ca \u05d8\u05db\u05e0\u05d9",         tech_score,    tech_summary),
+        ("\U0001f4c1 \u05e4\u05d5\u05e0\u05d3\u05de\u05e0\u05d8\u05dc\u05d9",    fund_score,    fund_rating),
+        ("\U0001f4f0 \u05d7\u05d3\u05e9\u05d5\u05ea",        news_score,    news_rating),
+        ("\U0001f310 \u05e9\u05d5\u05e7",          mkt_score_val, mkt_label),
+    ]
+    parts.append('<div style="display:flex;gap:12px;flex-wrap:wrap;margin:12px 0">')
+    for s_label, s_val, s_sig in score_items:
+        s_color = _score_color(s_val)
+        s_pct = min(float(s_val) / 10.0 * 100, 100)
+        parts.append(
+            f'<div style="flex:1;min-width:150px;background:#21262d;border-radius:8px;padding:10px 14px">'
+            f'<div style="color:#8b949e;font-size:0.75rem;margin-bottom:3px">{_esc(s_label)}</div>'
+            f'<div style="color:{s_color};font-size:1.3rem;font-weight:800">{s_val:.1f}<span style="font-size:0.75rem;color:#8b949e">/10</span></div>'
+            f'<div style="background:#30363d;border-radius:4px;height:5px;margin:5px 0">'
+            f'<div style="background:{s_color};width:{s_pct:.0f}%;height:5px;border-radius:4px"></div>'
+            f'</div>'
+            f'<div style="font-size:0.72rem;color:{s_color}">{_esc(s_sig)}</div>'
+            f'</div>'
+        )
+    parts.append('</div>')
 
     # Price + daily change + badges
     parts.append('<div class="price-bar">')
@@ -548,6 +628,82 @@ def build_html_report(
     parts.append('</div></div>')  # end section-body + section
 
     # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 2B — ENTRY STRATEGY
+    # ══════════════════════════════════════════════════════════════════════════
+    parts.append('<div class="section">')
+    parts.append('<div class="section-title" style="background:#00695c">📋 אסטרטגיית כניסה — Entry Strategy</div>')
+    parts.append('<div class="section-body">')
+
+    _entry_p = levels.get("entry_price", current_price or 0)
+    _t1 = levels.get("target_1", 0) or 0
+    _t2 = levels.get("target_2", 0) or 0
+    _sl = levels.get("stop_loss", 0) or 0
+    _rr = levels.get("risk_reward_ratio", 2) or 2
+    _atr_v = levels.get("atr", 0) or 0
+    _risk_amt = levels.get("risk_amount", 0) or (abs(_entry_p - _sl) if _sl else 0)
+
+    # Derive entry strategy text from technical signal
+    tech_sig_upper = str(tech_summary).upper()
+    if "STRONG BUY" in tech_sig_upper:
+        strategy_desc = "כניסה מלאה מיידית — הסיגנל חזק מספיק לכניסה בפוזיציה מלאה בשלב זה."
+        entry_stage = "מיידית (100%)"
+    elif "BUY" in tech_sig_upper:
+        strategy_desc = "כניסה מדורגת — 50% מהפוזיציה עכשיו, 50% נוספים בירידה קלה לאזור ה-ATR הראשון."
+        entry_stage = "מדורגת (50% + 50%)"
+    elif "STRONG SELL" in tech_sig_upper or "SELL" in tech_sig_upper:
+        strategy_desc = "המתן לתיקון — לא מומלץ להיכנס כרגע. המתן לרמות תמיכה."
+        entry_stage = "המתנה — אין כניסה"
+    else:
+        strategy_desc = "כניסה זהירה — שוק ניטרלי. אפשר להיכנס ב-30-40% ולהמתין לאישור מגמה."
+        entry_stage = "זהירה (30-40%)"
+
+    # Position sizing guidance (example for 10K capital)
+    example_capital = 10000
+    risk_per_trade = 0.02  # 2% per trade
+    max_risk_capital = example_capital * risk_per_trade
+    if _risk_amt and _risk_amt > 0 and _entry_p and _entry_p > 0:
+        shares = int(max_risk_capital / _risk_amt)
+        pos_val = shares * _entry_p
+        pos_pct = (pos_val / example_capital) * 100
+    else:
+        shares = 0
+        pos_val = 0
+        pos_pct = 0
+
+    strategy_rows = [
+        ("שלב כניסה",          entry_stage),
+        ("מחיר כניסה",         _fmt_price(_entry_p, currency_sym)),
+        ("יעד 1 (מכירה חלקית)", f"{_fmt_price(_t1, currency_sym)} (+{((_t1/_entry_p)-1)*100:.1f}%)" if _t1 and _entry_p else "N/A"),
+        ("יעד 2 (מכירה מלאה)", f"{_fmt_price(_t2, currency_sym)} (+{((_t2/_entry_p)-1)*100:.1f}%)" if _t2 and _entry_p else "N/A"),
+        ("Stop Loss",          f"{_fmt_price(_sl, currency_sym)} ({((_sl/_entry_p)-1)*100:.1f}%)" if _sl and _entry_p else "N/A"),
+        ("יחס סיכון:סיכוי",    f"1 : {float(_rr):.1f}"),
+        ("ATR (תנודתיות יומית)", _fmt_price(_atr_v, currency_sym)),
+    ]
+    if shares > 0:
+        strategy_rows += [
+            ("— דוגמת ניהול פוזיציה (הון 10K) —", ""),
+            ("סיכון מקסימלי (2%)",    f"{currency_sym}{max_risk_capital:.0f}"),
+            ("כמות מניות",             str(shares)),
+            ("שווי פוזיציה",           f"{currency_sym}{pos_val:,.0f} ({pos_pct:.0f}% מהתיק)"),
+        ]
+
+    parts.append(
+        f'<p style="margin-bottom:14px;padding:10px 14px;background:#e8f5e9;'
+        f'border-right:4px solid #00695c;border-radius:4px;color:#1b5e20;font-size:0.9em">'
+        f'{_esc(strategy_desc)}</p>'
+    )
+    parts.append(
+        '<table class="data-table"><thead><tr><th style="width:45%">פרמטר</th><th>ערך</th></tr></thead><tbody>'
+    )
+    for lbl, val in strategy_rows:
+        if val == "":
+            parts.append(f'<tr><td colspan="2" style="background:#f5f5f5;font-weight:700;color:#555;font-size:0.82em">{_esc(lbl)}</td></tr>')
+        else:
+            parts.append(f'<tr><td style="color:#444">{_esc(lbl)}</td><td style="font-weight:600">{_esc(str(val))}</td></tr>')
+    parts.append('</tbody></table>')
+    parts.append('</div></div>')
+
+    # ══════════════════════════════════════════════════════════════════════════
     # SECTION 3 — COMPANY OVERVIEW
     # ══════════════════════════════════════════════════════════════════════════
     parts.append('<div class="section">')
@@ -619,6 +775,71 @@ def build_html_report(
         )
 
     parts.append('</div></div>')  # end section
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION 3B — MARKET & SECTOR CONTEXT
+    # ══════════════════════════════════════════════════════════════════════════
+    parts.append('<div class="section">')
+    parts.append('<div class="section-title" style="background:#37474f">🌐 מצב השוק והסקטורים — Market & Sector Context</div>')
+    parts.append('<div class="section-body">')
+
+    # Market score badge
+    mkt_color = _score_color(mkt_score_val)
+    mkt_bar_pct = min(float(mkt_score_val) / 10.0 * 100, 100)
+    parts.append(
+        f'<div style="margin-bottom:14px">'
+        f'<span style="font-size:0.85em;color:#555">Market Score: </span>'
+        f'<strong style="color:{mkt_color}">{mkt_score_val:.1f} / 10</strong>'
+        f'<div style="background:#e0e0e0;border-radius:8px;height:8px;margin:6px 0;width:300px">'
+        f'<div style="background:{mkt_color};width:{mkt_bar_pct:.0f}%;height:8px;border-radius:8px"></div>'
+        f'</div>'
+        f'{_signal_badge(mkt_label)}'
+        f'</div>'
+    )
+
+    # Does market SUPPORT this stock?
+    support_color = "#00b86c" if mkt_score_val >= 6.5 else "#e53935" if mkt_score_val <= 4 else "#f0a500"
+    support_text  = "השוק תומך בעלייה" if mkt_score_val >= 6.5 else \
+                    "השוק מהווה רוח נגד" if mkt_score_val <= 4 else \
+                    "השוק ניטרלי — אין תמיכה ברורה"
+    combined      = final_score  # already computed
+    support_overall = "תומך" if combined >= 6.5 and mkt_score_val >= 5.5 else \
+                      "מנגד" if combined < 4.5 or mkt_score_val < 4 else "ניטרלי"
+
+    parts.append(
+        f'<div style="padding:12px 16px;border-radius:8px;margin-bottom:14px;'
+        f'background:{support_color}15;border:1.5px solid {support_color}">'
+        f'<span style="font-size:1.1rem;font-weight:700;color:{support_color}">{_esc(support_text)}</span>'
+        f'</div>'
+    )
+
+    # Market details table
+    parts.append(
+        '<table class="data-table"><thead><tr>'
+        '<th>מדד / מדד</th><th>ערך</th><th>השפעה על המניה</th>'
+        '</tr></thead><tbody>'
+    )
+
+    if mkt_details:
+        for detail in mkt_details:
+            # parse "VIX: 18.1 (Low Risk)" into parts
+            parts.append(
+                f'<tr><td style="font-weight:600">{_esc(detail.split(":")[0])}</td>'
+                f'<td>{_esc(":".join(detail.split(":")[1:]).strip())}</td>'
+                f'<td>—</td></tr>'
+            )
+    else:
+        parts.append(f'<tr><td colspan="3">ציון שוק: {mkt_score_val:.1f}/10 — {mkt_label}</td></tr>')
+
+    # Sector context
+    sector_name = (info.get("sector") if info else None) or "N/A"
+    parts.append(
+        f'<tr><td style="font-weight:600">סקטור</td>'
+        f'<td>{_esc(sector_name)}</td>'
+        f'<td>{_esc(support_overall)}</td></tr>'
+    )
+    parts.append('</tbody></table>')
+    parts.append('</div></div>')
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 4 — INTERACTIVE CHART
@@ -734,6 +955,92 @@ def build_html_report(
         )
     parts.append('</tbody></table></td>')
     parts.append('</tr></table>')
+
+    # 5C — Momentum summary with interpretation
+    parts.append('<h3 style="margin:18px 0 10px;color:#0288d1;font-size:0.95rem">📈 פרשנות מומנטום — Momentum Interpretation</h3>')
+
+    momentum_indicators = []
+    if tech_df is not None:
+        rsi_v = _last_val(tech_df, "RSI")
+        macd_v = _last_val(tech_df, "MACD")
+        macd_sig_v = _last_val(tech_df, "MACD_Signal")
+        stoch_k_v = _last_val(tech_df, "STOCH_K")
+        stoch_d_v = _last_val(tech_df, "STOCH_D")
+        wr_v = _last_val(tech_df, "WILLIAMS_R")
+        cci_v = _last_val(tech_df, "CCI")
+        adx_v = _last_val(tech_df, "ADX")
+
+        if rsi_v is not None:
+            if rsi_v > 70:
+                rsi_int = ("RSI", f"{rsi_v:.1f}", "OVERBOUGHT — סיכון לתיקון", "#e53935")
+            elif rsi_v < 30:
+                rsi_int = ("RSI", f"{rsi_v:.1f}", "OVERSOLD — הזדמנות קנייה", "#00b86c")
+            elif rsi_v > 50:
+                rsi_int = ("RSI", f"{rsi_v:.1f}", "Bullish Range (>50)", "#00b86c")
+            else:
+                rsi_int = ("RSI", f"{rsi_v:.1f}", "Bearish Range (<50)", "#e53935")
+            momentum_indicators.append(rsi_int)
+
+        if macd_v is not None and macd_sig_v is not None:
+            if macd_v > macd_sig_v:
+                macd_int = ("MACD", f"{macd_v:.3f}", f"Above Signal ({macd_sig_v:.3f}) — Bullish", "#00b86c")
+            else:
+                macd_int = ("MACD", f"{macd_v:.3f}", f"Below Signal ({macd_sig_v:.3f}) — Bearish", "#e53935")
+            momentum_indicators.append(macd_int)
+
+        if stoch_k_v is not None:
+            if stoch_k_v > 80:
+                s_int = ("Stochastic %K", f"{stoch_k_v:.1f}", "Overbought zone (>80)", "#e53935")
+            elif stoch_k_v < 20:
+                s_int = ("Stochastic %K", f"{stoch_k_v:.1f}", "Oversold zone (<20)", "#00b86c")
+            else:
+                s_int = ("Stochastic %K", f"{stoch_k_v:.1f}", "Neutral zone", "#888")
+            momentum_indicators.append(s_int)
+
+        if wr_v is not None:
+            if wr_v > -20:
+                wr_int = ("Williams %R", f"{wr_v:.1f}", "Overbought (>-20)", "#e53935")
+            elif wr_v < -80:
+                wr_int = ("Williams %R", f"{wr_v:.1f}", "Oversold (<-80)", "#00b86c")
+            else:
+                wr_int = ("Williams %R", f"{wr_v:.1f}", "Neutral zone", "#888")
+            momentum_indicators.append(wr_int)
+
+        if cci_v is not None:
+            if cci_v > 100:
+                cci_int = ("CCI", f"{cci_v:.0f}", "Overbought (>100)", "#e53935")
+            elif cci_v < -100:
+                cci_int = ("CCI", f"{cci_v:.0f}", "Oversold (<-100)", "#00b86c")
+            else:
+                cci_int = ("CCI", f"{cci_v:.0f}", "Neutral zone", "#888")
+            momentum_indicators.append(cci_int)
+
+        if adx_v is not None:
+            if adx_v > 40:
+                adx_int = ("ADX (Trend Strength)", f"{adx_v:.1f}", "Strong trend (>40)", "#00b86c")
+            elif adx_v > 25:
+                adx_int = ("ADX (Trend Strength)", f"{adx_v:.1f}", "Moderate trend (25-40)", "#f0a500")
+            else:
+                adx_int = ("ADX (Trend Strength)", f"{adx_v:.1f}", "Weak/No trend (<25)", "#888")
+            momentum_indicators.append(adx_int)
+
+    if momentum_indicators:
+        parts.append(
+            '<table class="data-table"><thead><tr>'
+            '<th>Indicator</th><th>Value</th><th>Interpretation</th>'
+            '</tr></thead><tbody>'
+        )
+        for ind_name, ind_val, ind_interp, ind_color in momentum_indicators:
+            parts.append(
+                f'<tr>'
+                f'<td style="font-weight:600">{_esc(ind_name)}</td>'
+                f'<td style="font-family:monospace;text-align:center;font-weight:700;color:{ind_color}">{_esc(ind_val)}</td>'
+                f'<td style="color:{ind_color};font-size:0.88em">{_esc(ind_interp)}</td>'
+                f'</tr>'
+            )
+        parts.append('</tbody></table>')
+    else:
+        parts.append('<p style="color:#888;font-style:italic">Momentum data not available.</p>')
 
     parts.append('</div></div>')  # end section
 
@@ -886,6 +1193,102 @@ def build_html_report(
         )
 
     parts.append('</div></div>')  # end section
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECTION FINAL — OVERALL SCORE & RECOMMENDATION
+    # ══════════════════════════════════════════════════════════════════════════
+    parts.append('<div class="section">')
+    fc_final = _score_color(final_score)
+    rating_bg = {"STRONG BUY": "#00695c", "BUY": "#2e7d32", "NEUTRAL": "#5c6bc0", "SELL": "#c62828", "STRONG SELL": "#b71c1c"}.get(final_rating, "#555")
+    parts.append(f'<div class="section-title" style="background:{rating_bg}">🎯 ציון כולל ודירוג — Final Score &amp; Rating</div>')
+    parts.append('<div class="section-body">')
+
+    # Big score display
+    final_pct = min(float(final_score) / 10.0 * 100, 100)
+    parts.append(
+        f'<div style="text-align:center;margin-bottom:24px">'
+        f'<div style="font-size:3.5rem;font-weight:900;color:{fc_final}">{final_score:.1f}</div>'
+        f'<div style="font-size:0.9rem;color:#555;margin-top:4px">ציון כולל משוקלל / 10</div>'
+        f'<div style="background:#e0e0e0;border-radius:10px;height:14px;margin:12px auto;max-width:400px">'
+        f'<div style="background:{fc_final};width:{final_pct:.0f}%;height:14px;border-radius:10px"></div>'
+        f'</div>'
+        f'<div style="display:inline-block;padding:8px 28px;border-radius:20px;background:{rating_bg};color:#fff;font-size:1.2rem;font-weight:800;margin-top:8px">'
+        f'{_esc(final_rating)}'
+        f'</div>'
+        f'</div>'
+    )
+
+    # Score breakdown table with weights
+    parts.append('<h3 style="margin-bottom:10px;font-size:0.95rem;color:#444">שקלול ציונים — Score Breakdown</h3>')
+    parts.append(
+        '<table class="data-table" style="margin-bottom:18px">'
+        '<thead><tr>'
+        '<th>רכיב</th><th>ציון (1-10)</th><th>משקל</th><th>תרומה לציון</th><th>דירוג</th>'
+        '</tr></thead><tbody>'
+    )
+    breakdown_rows = [
+        ("📊 ניתוח טכני",      tech_score,    W_TECH, tech_summary),
+        ("📑 ניתוח פונדמנטלי", fund_score,    W_FUND, fund_rating),
+        ("📰 חדשות וסנטימנט", news_score,    W_NEWS, news_rating),
+        ("🌐 מצב שוק",         mkt_score_val, W_MKT,  mkt_label),
+    ]
+    for comp_name, comp_score, comp_weight, comp_rating in breakdown_rows:
+        comp_color = _score_color(comp_score)
+        contrib = comp_score * comp_weight
+        parts.append(
+            f'<tr>'
+            f'<td style="font-weight:600">{_esc(comp_name)}</td>'
+            f'<td style="text-align:center;font-weight:700;color:{comp_color}">{comp_score:.1f}</td>'
+            f'<td style="text-align:center;color:#666">{int(comp_weight*100)}%</td>'
+            f'<td style="text-align:center;font-weight:600">{contrib:.2f}</td>'
+            f'<td>{_signal_badge(comp_rating)}</td>'
+            f'</tr>'
+        )
+    # Total row
+    parts.append(
+        f'<tr style="background:#f0f4ff;font-weight:800">'
+        f'<td>🏆 ציון כולל משוקלל</td>'
+        f'<td style="text-align:center;color:{fc_final};font-size:1.1rem">{final_score:.1f}</td>'
+        f'<td style="text-align:center">100%</td>'
+        f'<td style="text-align:center;color:{fc_final}">{final_score:.2f}</td>'
+        f'<td>{_signal_badge(final_rating)}</td>'
+        f'</tr>'
+    )
+    parts.append('</tbody></table>')
+
+    # Trading levels quick recap
+    parts.append('<h3 style="margin:14px 0 10px;font-size:0.95rem;color:#444">רמות מסחר — Key Levels</h3>')
+    _ep = levels.get("entry_price", current_price or 0)
+    _t1r = levels.get("target_1", 0) or 0
+    _t2r = levels.get("target_2", 0) or 0
+    _slr = levels.get("stop_loss", 0) or 0
+    _rrr = levels.get("risk_reward_ratio", 0) or 0
+    def _pct2(v):
+        if current_price and current_price != 0 and v:
+            return f"{(float(v)/float(current_price)-1)*100:+.1f}%"
+        return ""
+    levels_recap = [
+        ("כניסה", _fmt_price(_ep, currency_sym), ""),
+        ("יעד 1", _fmt_price(_t1r, currency_sym), _pct2(_t1r)),
+        ("יעד 2", _fmt_price(_t2r, currency_sym), _pct2(_t2r)),
+        ("Stop Loss", _fmt_price(_slr, currency_sym), _pct2(_slr)),
+        ("Risk:Reward", f"1 : {float(_rrr):.0f}", ""),
+        ("סיגנל", tech_summary, ""),
+    ]
+    parts.append(
+        '<table class="data-table"><thead><tr><th>Level</th><th>Price</th><th>% Change</th></tr></thead><tbody>'
+    )
+    for lbl, price_v, pct_v in levels_recap:
+        clr = "#00b86c" if lbl in ("יעד 1","יעד 2","כניסה") else "#e53935" if "Stop" in lbl else "#555"
+        parts.append(
+            f'<tr>'
+            f'<td style="font-weight:600;color:{clr}">{_esc(lbl)}</td>'
+            f'<td style="font-weight:700">{_esc(str(price_v))}</td>'
+            f'<td style="color:{clr}">{_esc(str(pct_v))}</td>'
+            f'</tr>'
+        )
+    parts.append('</tbody></table>')
+    parts.append('</div></div>')
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 9 — DISCLAIMER

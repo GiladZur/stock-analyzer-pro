@@ -1064,6 +1064,7 @@ if st.session_state.get("analysis_done") and not st.session_state.get("error"):
             tech, fund, levels, info, ai_results, change, news_items,
             df=df,
             chart_fig=fig_full,
+            market_data=st.session_state.get("market_data"),
         ).encode("utf-8")
         _dl_col, _info_col = st.columns([1, 3])
         with _dl_col:
